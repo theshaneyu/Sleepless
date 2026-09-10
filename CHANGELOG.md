@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-09
+
+### Added
+- **Claude Remote Control.** A second switch in the popover, on by default, that runs
+  `claude remote-control` in the background whenever Sleepless is keeping the Mac awake.
+  Close the lid and you can still start new Claude Code sessions from the Claude app on
+  your phone. Turning the switch off terminates the server immediately.
+- A searchable repository picker: Remote Control sessions are created in the repo you
+  choose under `~/Projects`, so the popover lists every git repo there and filters as you
+  type (space-separated substrings, all must match). Arrow keys move the selection while
+  the caret stays in the search field; Return picks, Escape goes back.
+- The server is supervised. `claude remote-control` exits on its own after roughly ten
+  minutes without network, so Sleepless restarts it with jittered backoff
+  (5s, 15s, 45s, 2m, 5m) and resets the budget after any run lasting two minutes or more.
+  After five straight failures it stops retrying and turns the switch off rather than
+  looping forever. Failures that retrying can never fix — an untrusted workspace, a
+  missing claude.ai login — are read off the CLI's own output and reported as one
+  actionable message instead of five silent attempts. Output goes to
+  `~/Library/Logs/Sleepless/remote-control.log`.
+- The log stays small. `claude remote-control` repaints its whole status block about once a
+  second, which is invisible in a terminal but appends roughly 1.8 MB an hour of identical
+  frames to a file — and the CLI has no switch to stop it, since this subcommand rejects
+  `--ax-screen-reader` and ignores `CLAUDE_AX_SCREEN_READER`. Sleepless reads the output
+  through a pipe instead, strips the escape codes, and keeps a frame only when it differs
+  from the one before, so repaints cost nothing while every state change and error is still
+  recorded. Measured against a captured session, 42 KB of raw output became 2.7 KB. A 256 KB
+  cap bounds anything pathological.
+
+Remote Control adds no daemon: it is a child process that lives and dies with the
+keep-awake switch, so the auto-off timer, the battery floor, Low Power Mode, quitting the
+app, and the Mac going to sleep all tear it down without any extra machinery.
+
 ## [1.2.7] - 2026-06-03
 
 ### Changed

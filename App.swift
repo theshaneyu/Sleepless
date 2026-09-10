@@ -13,14 +13,14 @@
 //
 // UI: clicking the menu-bar coffee cup opens a small native popover with an NSSwitch
 // toggle (the System-Settings control), a state caption, an auto-off timer, the
-// battery-floor slider, a Launch-at-login switch, and Quit. The menu-bar glyph also
-// shows state at a glance.
+// battery-floor slider, a Claude Remote Control switch + repo picker, a Launch-at-login
+// switch, and Quit. The menu-bar glyph also shows state at a glance.
 //
 // The coffee-cup metaphor is literal: an EMPTY cup means the Mac sleeps normally, a
 // FULL cup means it is being kept awake (caffeinated), and a full cup with a small
 // dot means it is awake on battery with the auto-off safety net live.
 //
-// Three small, fail-safe features layer on top, none of which adds a daemon or
+// Four small, fail-safe features layer on top, none of which adds a daemon or
 // persists OS state (so "reboot resets it" still holds):
 //   1. Auto-off timer (1h / 2h) — a one-shot in-memory Timer that flips sleep back
 //      on when it fires. Dies on quit; nothing survives a reboot.
@@ -29,6 +29,11 @@
 //      re-enable disablesleep on its own.
 //   3. Low-Power-Mode auto-off — on battery, if Low Power Mode is on, Sleepless
 //      turns itself off. Same shape as the battery floor, evaluated on the same tick.
+//   4. Claude Remote Control — ON by default. While the Mac is kept awake, a supervised
+//      `claude remote-control` child process runs in a repo you pick under ~/Projects, so
+//      new Claude Code sessions can be started from the phone with the lid closed. It is a
+//      child process, not a daemon: it starts and dies with the keep-awake switch, and the
+//      OS reaps it on sleep.
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \
@@ -45,6 +50,138 @@ private let floorKey = "batteryFloorPercent"
 private let floorDefault = 15
 private let floorMin = 5
 private let floorMax = 50
+
+// Claude Remote Control (Feature 4): an optional companion process running
+// `claude remote-control` inside a chosen repo, so a lid-closed Mac can still accept new
+// Claude Code sessions started from the phone. Its lifecycle follows the keep-awake switch —
+// the server exists only while the Mac is kept awake, and macOS reaping it on sleep is
+// exactly the wanted behaviour, so no extra teardown is needed for the auto-off timer.
+private let rcEnabledKey = "remoteControlEnabled"
+private let rcRepoKey = "remoteControlRepo"
+private let rcDefaultRepo = "inLineAPI"
+private let rcProjectsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects")
+// Supervisor backoff. `claude remote-control` exits on its own after roughly 10 minutes
+// without network, so a short outage must not need a manual restart — but a permanently
+// broken setup must not retry forever either, hence a hard cap rather than endless backoff.
+private let rcBackoffDelays: [TimeInterval] = [5, 15, 45, 120, 300]
+private let rcHealthyUptime: TimeInterval = 120   // ran at least this long -> next exit gets a fresh retry budget
+private let rcLogByteCap = 256 * 1024             // pathological-output backstop; dedup alone keeps runs far below this
+private let rcLogFrameCap = 64 * 1024             // output with no repaint in it at all must not buffer forever
+
+// A pipe read ends wherever the buffer ran out, which can be mid-character — and the status
+// line is full of multi-byte glyphs (·, ✔︎, …). Decoding a chunk that ends that way yields
+// nothing at all, so the trailing partial sequence is held back until the rest of it arrives.
+private func trailingPartialCharacterLength(_ data: Data) -> Int {
+    var trailing = 0
+    var index = data.endIndex - 1
+    while index >= data.startIndex, trailing < 4 {
+        let byte = data[index]
+        if byte & 0xC0 == 0x80 { trailing += 1; index -= 1; continue }   // continuation byte
+        let width = byte & 0x80 == 0 ? 1 : (byte & 0xE0 == 0xC0 ? 2 : (byte & 0xF0 == 0xE0 ? 3 : 4))
+        return width > trailing + 1 ? trailing + 1 : 0                   // still short of a whole character
+    }
+    return 0   // all continuation bytes, or empty: nothing useful to hold back
+}
+
+// `claude remote-control` draws a live TUI: it repaints its whole status block about once a
+// second by moving the cursor up and erasing. Invisible in a terminal, but against a file it
+// appends ~1.8 MB an hour of byte-identical frames. The CLI offers no way off: this subcommand
+// rejects `--ax-screen-reader` outright and ignores CLAUDE_AX_SCREEN_READER, so the supervisor
+// filters the stream itself rather than depending on CLI behaviour that is not documented.
+//
+// The cursor-up sequence IS the child's frame delimiter, so we split on it and keep a frame
+// only when it differs from the one before. Repaints collapse to nothing while every state
+// change and error still lands in the file, which is the part worth keeping.
+private let rcCursorUpPattern = "\u{1B}\\[[0-9]*A"
+private let rcEscapePattern =
+    "\u{1B}\\][^\u{07}\u{1B}]*(?:\u{07}|\u{1B}\\\\)"   // OSC (hyperlinks); payload goes with it
+    + "|\u{1B}\\[[0-9;?]*[ -/]*[@-~]"                  // CSI (colour, erase, cursor moves)
+    + "|\u{1B}."                                       // anything else escaped
+
+private final class RemoteControlLog {
+    private let queue = DispatchQueue(label: "com.sleepless.remote-control-log")
+    private let handle: FileHandle?
+    private var bytes = Data()
+    private var pending = ""
+    private var lastFrame = ""
+    private var written = 0
+
+    // Truncated per run: only the current server's output matters.
+    init(url: URL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        handle = try? FileHandle(forWritingTo: url)
+    }
+
+    func ingest(_ data: Data) {
+        queue.async { [self] in
+            bytes.append(data)
+            let cut = bytes.count - trailingPartialCharacterLength(bytes)
+            guard cut > 0 else { return }
+            pending += String(decoding: bytes.prefix(cut), as: UTF8.self)
+            bytes.removeFirst(cut)
+            var frames = pending
+                .replacingOccurrences(of: rcCursorUpPattern, with: "\u{0}", options: .regularExpression)
+                .components(separatedBy: "\u{0}")
+            pending = frames.removeLast()   // no delimiter yet: still being drawn, wait for the rest
+            frames.forEach(emit)
+            if pending.utf8.count > rcLogFrameCap { emit(pending); pending = "" }   // never repaints; don't hoard it
+        }
+    }
+
+    // Blocks until everything handed over so far is on disk, so the exit path can read the
+    // file back and still see the message the child printed on its way out.
+    func flush() {
+        queue.sync { drain() }
+    }
+
+    // Flushes the frame in flight, which is the one carrying an exit message or a crash.
+    func finish() {
+        queue.async { [self] in
+            drain()
+            try? handle?.close()
+        }
+    }
+
+    private func drain() {
+        emit(pending + String(decoding: bytes, as: UTF8.self))   // no more bytes coming to complete it
+        bytes.removeAll()
+        pending = ""
+    }
+
+    private func emit(_ frame: String) {
+        let text = frame
+            .replacingOccurrences(of: rcEscapePattern, with: "", options: .regularExpression)
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !text.isEmpty else { return }
+        let body = text.joined(separator: "\n")
+        guard body != lastFrame else { return }
+        lastFrame = body
+        let stamp = rcLogTimeFormatter.string(from: Date())
+        write(text.map { "[\(stamp)] \($0)\n" }.joined())
+    }
+
+    private func write(_ line: String) {
+        guard let handle, let data = line.data(using: .utf8) else { return }
+        if written + data.count > rcLogByteCap {
+            try? handle.truncate(atOffset: 0)
+            try? handle.seek(toOffset: 0)
+            written = 0
+            lastFrame = ""
+        }
+        try? handle.write(contentsOf: data)
+        written += data.count
+    }
+}
+
+private let rcLogTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss"
+    return f
+}()
 
 // MARK: - Menu-bar coffee glyph (native SF Symbols, MONOCHROME template — state by SHAPE)
 // macOS convention: a menu-bar extra is a template image (no colour) so it adapts to light/dark
@@ -138,7 +275,8 @@ private final class CardView: NSView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate,
+                         NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private let onGlyph = makeCupGlyph(.on)
@@ -167,12 +305,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var countdownTicker: Timer?      // 1 Hz label refresh, only while the popover is open
     private var timerEndDate: Date?
 
+    // Claude Remote Control (Feature 4)
+    private var rcSwitch: NSSwitch!
+    private var rcRepoButton: NSButton!
+    private var rcStatusLabel: NSTextField!
+    private var rcEnabled = true
+    private var rcRepo = rcDefaultRepo
+    private var rcProcess: Process?
+    private var rcStartedAt: Date?
+    private var rcAttempt = 0
+    private var rcRetryTimer: Timer?
+    private var rcRetryDeadline: Date?
+    private var rcMessage = ""
+    private var rcLog: RemoteControlLog?
+
+    // Searchable repo picker (second page of the popover)
+    private var settingsPage: FlippedView!
+    private var pickerPage: FlippedView!
+    private var repoSearchField: NSSearchField!
+    private var repoTable: NSTableView!
+    private var allRepos: [String] = []
+    private var filteredRepos: [String] = []
+
     private let popoverWidth: CGFloat = 320
-    private let popoverHeight: CGFloat = 432
+    private let popoverHeight: CGFloat = 544
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         batteryFloorPercent = min(max((UserDefaults.standard.object(forKey: floorKey) as? Int) ?? floorDefault, floorMin), floorMax)
+        rcEnabled = (UserDefaults.standard.object(forKey: rcEnabledKey) as? Bool) ?? true   // ON by default
+        rcRepo = UserDefaults.standard.string(forKey: rcRepoKey) ?? rcDefaultRepo
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = offGlyph
@@ -203,6 +365,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         root.material = .popover
         root.blendingMode = .behindWindow
         root.state = .followsWindowActiveState
+        // Two pages share the popover: the settings list, and the repo picker. A nested
+        // NSPopover would fight the parent for key-window status and break the search
+        // field's typing, so the picker swaps in place instead.
+        let page = FlippedView(frame: root.bounds)
+        root.addSubview(page)
+        settingsPage = page
 
         // Header: small coffee mark + "Sleepless" (quiet system glyph, not a branded logo).
         // The mark tints to the brand violet while the Mac is kept awake.
@@ -210,17 +378,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let headerCup = makeCupGlyph(.on); headerCup.isTemplate = true
         mark.image = headerCup
         mark.contentTintColor = .labelColor
-        root.addSubview(mark)
+        page.addSubview(mark)
         headerMark = mark
         let title = makeLabel("Sleepless", font: .systemFont(ofSize: 14, weight: .semibold), color: .labelColor)
         title.frame = NSRect(x: pad + 24, y: 14, width: contentW - 24, height: 20)
-        root.addSubview(title)
+        page.addSubview(title)
 
         // Grouped inset cards (System Settings rhythm) replace per-row hairline separators.
         func makeCard(_ rect: NSRect) -> CardView {
             let c = CardView(frame: rect)
             c.wantsLayer = true
-            root.addSubview(c)
+            page.addSubview(c)
             return c
         }
         let swProto = NSSwitch().intrinsicContentSize
@@ -292,18 +460,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         maxHint.frame = NSRect(x: contentW - ci - 34, y: ci + 50, width: 34, height: 13)
         g3.addSubview(maxHint)
 
-        // GROUP 4 — launch at login (off by default; never auto-enables sleep prevention)
-        let g4y = g3y + g3h + 12, g4h: CGFloat = 46
+        // GROUP 4 — Claude Remote Control companion (ON by default), plus the repo its
+        // sessions open in. Turning it off here terminates the server immediately.
+        let g4y = g3y + g3h + 12, g4h: CGFloat = 100
         let g4 = makeCard(NSRect(x: pad, y: g4y, width: contentW, height: g4h))
+        let rcLabel = makeLabel("Claude Remote Control", font: .systemFont(ofSize: 13), color: .labelColor)
+        rcLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
+        g4.addSubview(rcLabel)
+        rcSwitch = NSSwitch()
+        rcSwitch.target = self
+        rcSwitch.action = #selector(rcToggled(_:))
+        rcSwitch.state = rcEnabled ? .on : .off
+        rcSwitch.frame = NSRect(x: contentW - ci - swW, y: ci + (22 - swH) / 2, width: swW, height: swH)
+        g4.addSubview(rcSwitch)
+        let repoLabel = makeLabel("Repository", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        repoLabel.frame = NSRect(x: ci, y: ci + 34, width: 74, height: 22)
+        g4.addSubview(repoLabel)
+        rcRepoButton = NSButton(title: rcRepo, target: self, action: #selector(chooseRepo))
+        rcRepoButton.bezelStyle = .rounded
+        rcRepoButton.controlSize = .small
+        rcRepoButton.font = .systemFont(ofSize: 12)
+        rcRepoButton.cell?.lineBreakMode = .byTruncatingMiddle
+        rcRepoButton.frame = NSRect(x: ci + 78, y: ci + 32, width: cw - 78, height: 22)
+        g4.addSubview(rcRepoButton)
+        rcStatusLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
+        rcStatusLabel.frame = NSRect(x: ci, y: ci + 62, width: cw, height: 26)
+        rcStatusLabel.usesSingleLineMode = false
+        rcStatusLabel.lineBreakMode = .byWordWrapping
+        rcStatusLabel.maximumNumberOfLines = 2
+        rcStatusLabel.cell?.wraps = true
+        g4.addSubview(rcStatusLabel)
+
+        // GROUP 5 — launch at login (off by default; never auto-enables sleep prevention)
+        let g5y = g4y + g4h + 12, g5h: CGFloat = 46
+        let g5 = makeCard(NSRect(x: pad, y: g5y, width: contentW, height: g5h))
         let loginLabel = makeLabel("Launch at login", font: .systemFont(ofSize: 13), color: .labelColor)
         loginLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
-        g4.addSubview(loginLabel)
+        g5.addSubview(loginLabel)
         loginSwitch = NSSwitch()
         loginSwitch.target = self
         loginSwitch.action = #selector(loginToggled(_:))
         loginSwitch.state = loginItemEnabled() ? .on : .off
         loginSwitch.frame = NSRect(x: contentW - ci - swW, y: ci + (22 - swH) / 2, width: swW, height: swH)
-        g4.addSubview(loginSwitch)
+        g5.addSubview(loginSwitch)
 
         // Footer — Quit (separated by space, not a hairline)
         let quit = NSButton(title: "Quit Sleepless", target: self, action: #selector(quit))
@@ -311,8 +510,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quit.bezelStyle = .rounded
         quit.sizeToFit()
         let qs = quit.frame.size
-        quit.frame = NSRect(x: W - pad - qs.width, y: g4y + g4h + 12, width: qs.width, height: qs.height)
-        root.addSubview(quit)
+        quit.frame = NSRect(x: W - pad - qs.width, y: g5y + g5h + 12, width: qs.width, height: qs.height)
+        page.addSubview(quit)
+
+        // PAGE 2 — repo picker. ~40 repos under ~/Projects is far too many for a menu, so
+        // this is a search field over a plain list: type any substrings, all must match.
+        let picker = FlippedView(frame: root.bounds)
+        picker.isHidden = true
+        let back = NSButton(title: "Back", target: self, action: #selector(cancelRepoPick))
+        back.bezelStyle = .rounded
+        back.controlSize = .small
+        back.sizeToFit()
+        back.frame = NSRect(x: pad, y: 14, width: max(back.frame.width, 62), height: 20)
+        picker.addSubview(back)
+        let pickTitle = makeLabel("Choose repository", font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor)
+        pickTitle.alignment = .right
+        pickTitle.frame = NSRect(x: pad + 70, y: 14, width: contentW - 70, height: 20)
+        picker.addSubview(pickTitle)
+        repoSearchField = NSSearchField(frame: NSRect(x: pad, y: 44, width: contentW, height: 24))
+        repoSearchField.placeholderString = "Filter repositories"
+        repoSearchField.delegate = self
+        repoSearchField.sendsSearchStringImmediately = true
+        repoSearchField.sendsWholeSearchString = false
+        picker.addSubview(repoSearchField)
+        let table = NSTableView()
+        table.headerView = nil
+        table.rowHeight = 22
+        table.backgroundColor = .clear
+        table.usesAlternatingRowBackgroundColors = false
+        table.allowsEmptySelection = false
+        table.allowsMultipleSelection = false
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("repo"))
+        col.width = contentW - 12
+        table.addTableColumn(col)
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(repoRowClicked)
+        repoTable = table
+        let scroll = NSScrollView(frame: NSRect(x: pad, y: 78, width: contentW, height: popoverHeight - 78 - pad))
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        picker.addSubview(scroll)
+        root.addSubview(picker)
+        pickerPage = picker
 
         let vc = NSViewController()
         vc.view = root
@@ -341,8 +584,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
-        if keepAwakeTimer != nil { startCountdownTicker() }
+        showPicker(false)                      // always reopen on the settings page
+        startCountdownTicker()                 // drives both the auto-off countdown and the reconnect countdown
         updateCountdownLabel()
+        renderRemoteControlUI()
         // Close when the user clicks anywhere outside the app (status bar, another app, desktop).
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.closePopover()
@@ -487,7 +732,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                selector: #selector(countdownTick), userInfo: nil, repeats: true)
     }
 
-    @objc private func countdownTick() { updateCountdownLabel() }
+    @objc private func countdownTick() {
+        updateCountdownLabel()
+        rcStatusLabel?.stringValue = remoteControlStatusText()
+    }
 
     private func updateCountdownLabel() {
         guard let end = timerEndDate, isOn else { countdownLabel?.stringValue = ""; return }
@@ -511,6 +759,304 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loginItemEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
+
+    // MARK: - Claude Remote Control (Feature 4)
+    // A supervised child process running `claude remote-control` in the chosen repo. It is a
+    // preference, not an independent switch: the server runs only while the Mac is kept awake,
+    // so closing the lid keeps remote sessions reachable and every existing auto-off path
+    // (timer, battery floor, Low Power Mode, manual toggle) tears it down for free.
+    @objc private func rcToggled(_ sender: NSSwitch) {
+        rcEnabled = sender.state == .on
+        UserDefaults.standard.set(rcEnabled, forKey: rcEnabledKey)
+        rcMessage = ""
+        rcAttempt = 0
+        syncRemoteControl()
+        renderRemoteControlUI()
+    }
+
+    private func syncRemoteControl() {
+        if isOn && rcEnabled { startRemoteControl() } else { stopRemoteControl() }
+    }
+
+    private func startRemoteControl() {
+        guard rcProcess == nil, rcRetryTimer == nil else { return }   // already up, or a retry is pending
+        guard let claude = resolveClaudeBinary() else {
+            failRemoteControl("Couldn\u{2019}t find the claude CLI.")
+            return
+        }
+        let cwd = rcProjectsRoot.appendingPathComponent(rcRepo)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDir), isDir.boolValue else {
+            failRemoteControl("\(rcRepo) is no longer in ~/Projects.")
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claude)
+        process.arguments = ["remote-control"]
+        process.currentDirectoryURL = cwd     // sessions are created here, so the repo IS the setting
+        var env = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        env["HOME"] = home
+        env["ANTHROPIC_API_KEY"] = nil        // Remote Control requires the claude.ai login; an API key blocks it
+        process.environment = env
+        process.standardInput = FileHandle.nullDevice   // no TTY: server mode runs fine, it just can\u{2019}t show its QR code
+        // A Pipe rather than the log file directly, so the TUI repaints are filtered out on the
+        // way through instead of piling up on disk. The handler drains it, so the child never
+        // blocks on a full 64 KB buffer.
+        let log = RemoteControlLog(url: remoteControlLogURL())
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            guard !data.isEmpty else {          // EOF: the child is gone
+                fh.readabilityHandler = nil
+                log.finish()
+                return
+            }
+            log.ingest(data)
+        }
+        rcLog = log
+        // Fires off the main thread; the pid is all we carry back, which also identifies
+        // WHICH process died (a deliberate stop clears rcProcess first, so its exit is ignored).
+        process.terminationHandler = { [weak self] proc in
+            let pid = proc.processIdentifier, status = proc.terminationStatus
+            Task { @MainActor in self?.remoteControlDidExit(pid: pid, status: status) }
+        }
+        do { try process.run() }
+        catch {
+            NSLog("Sleepless: failed to launch claude remote-control: %@", error.localizedDescription)
+            failRemoteControl("Couldn\u{2019}t start claude remote-control.")
+            return
+        }
+        rcProcess = process
+        rcStartedAt = Date()
+        rcMessage = ""
+        renderRemoteControlUI()
+    }
+
+    private func stopRemoteControl() {
+        rcRetryTimer?.invalidate(); rcRetryTimer = nil
+        rcRetryDeadline = nil
+        rcAttempt = 0
+        guard let process = rcProcess else { return }
+        rcProcess = nil                      // cleared first: the termination handler now ignores this exit
+        rcStartedAt = nil
+        rcLog = nil                          // the pipe handler owns it now, and closes it at EOF
+        process.terminate()                  // SIGTERM; claude shuts down and takes its session children with it
+        let pid = process.processIdentifier
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
+            if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+        }
+        renderRemoteControlUI()
+    }
+
+    // Changing the repo mid-flight: drop the old server, then start in the new directory
+    // after a beat so the two never overlap.
+    private func restartRemoteControl() {
+        guard rcProcess != nil || rcRetryTimer != nil else { return }
+        stopRemoteControl()
+        scheduleRemoteControlRetry(after: 2)
+    }
+
+    @MainActor
+    private func remoteControlDidExit(pid: Int32, status: Int32) {
+        guard let current = rcProcess, current.processIdentifier == pid else { return }
+        let uptime = rcStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        rcProcess = nil
+        rcStartedAt = nil
+        rcLog?.flush()                       // fatalRemoteControlReason() reads the file, so finish writing it first
+        rcLog = nil
+        NSLog("Sleepless: claude remote-control exited (status %d) after %.0fs", status, uptime)
+        guard isOn, rcEnabled else { renderRemoteControlUI(); return }
+        if let reason = fatalRemoteControlReason() {
+            failRemoteControl(reason)
+            return
+        }
+        if uptime >= rcHealthyUptime { rcAttempt = 0 }   // a long healthy run earns a fresh retry budget
+        guard rcAttempt < rcBackoffDelays.count else {
+            failRemoteControl("Claude Remote Control kept stopping. Turned it off.")
+            return
+        }
+        let delay = rcBackoffDelays[rcAttempt] * Double.random(in: 0.8...1.2)   // jitter
+        rcAttempt += 1
+        scheduleRemoteControlRetry(after: delay)
+    }
+
+    private func scheduleRemoteControlRetry(after delay: TimeInterval) {
+        rcRetryTimer?.invalidate()
+        rcRetryDeadline = Date().addingTimeInterval(delay)
+        rcRetryTimer = Timer.scheduledTimer(timeInterval: delay, target: self,
+                                            selector: #selector(rcRetryFired), userInfo: nil, repeats: false)
+        renderRemoteControlUI()
+    }
+
+    @objc private func rcRetryFired() {
+        rcRetryTimer = nil
+        rcRetryDeadline = nil
+        syncRemoteControl()
+        renderRemoteControlUI()
+    }
+
+    // Retrying can\u{2019}t fix an untrusted workspace or a missing claude.ai login, and the CLI says
+    // so on stderr. Reading the tail turns five silent retries into one actionable message.
+    private func fatalRemoteControlReason() -> String? {
+        guard let data = try? Data(contentsOf: remoteControlLogURL()) else { return nil }
+        let tail = String(decoding: data.suffix(4096), as: UTF8.self)
+        func mentions(_ s: String) -> Bool { tail.range(of: s, options: .caseInsensitive) != nil }
+        if mentions("not trusted") { return "Run claude once in ~/Projects/\(rcRepo) to trust it." }
+        if mentions("full-scope login") || mentions("authenticated") || mentions("auth login") {
+            return "Claude Remote Control needs a claude.ai login (claude auth login)."
+        }
+        if mentions("Remote Control is not available") { return "Remote Control isn\u{2019}t enabled for this account." }
+        return nil
+    }
+
+    // Give up: stop retrying and flip the switch off, so what the popover shows is what is
+    // actually running. Flipping it back on is the retry.
+    private func failRemoteControl(_ message: String) {
+        rcRetryTimer?.invalidate(); rcRetryTimer = nil
+        rcRetryDeadline = nil
+        rcAttempt = 0
+        rcEnabled = false
+        UserDefaults.standard.set(false, forKey: rcEnabledKey)
+        rcMessage = message
+        renderRemoteControlUI()
+        notify(message)
+    }
+
+    private func remoteControlStatusText() -> String {
+        if !rcMessage.isEmpty { return rcMessage }
+        if !rcEnabled { return "Off. Sleepless won\u{2019}t start a remote session." }
+        if let end = rcRetryDeadline {
+            let s = max(Int(end.timeIntervalSinceNow.rounded()), 1)
+            guard rcAttempt > 0 else { return "Restarting in \(s)s\u{2026}" }   // repo change, not a failure
+            return "Reconnecting in \(s)s (attempt \(rcAttempt) of \(rcBackoffDelays.count))."
+        }
+        if rcProcess != nil { return "Running. Start a session from the Claude app." }
+        return isOn ? "Starting\u{2026}" : "Starts when you turn Sleepless on."
+    }
+
+    private func renderRemoteControlUI() {
+        rcSwitch?.state = rcEnabled ? .on : .off
+        rcRepoButton?.title = rcRepo
+        rcStatusLabel?.stringValue = remoteControlStatusText()
+    }
+
+    // A GUI app inherits no shell PATH, so the CLI is found by probing where it installs.
+    private func resolveClaudeBinary() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
+                          "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "/usr/bin/claude"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private func remoteControlLogURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Sleepless/remote-control.log")
+    }
+
+    // MARK: - Repo picker (page 2)
+    @objc private func chooseRepo() {
+        allRepos = scanRepos()
+        repoSearchField.stringValue = ""
+        filteredRepos = allRepos
+        repoTable.reloadData()
+        selectRepoRow(filteredRepos.firstIndex(of: rcRepo) ?? 0)
+        showPicker(true)
+        repoSearchField.window?.makeFirstResponder(repoSearchField)
+    }
+
+    @objc private func cancelRepoPick() { showPicker(false) }
+
+    @objc private func repoRowClicked() { commitRepoSelection() }
+
+    private func showPicker(_ show: Bool) {
+        pickerPage?.isHidden = !show
+        settingsPage?.isHidden = show
+    }
+
+    private func scanRepos() -> [String] {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: rcProjectsRoot.path) else { return [] }
+        return entries
+            .filter { !$0.hasPrefix(".") && fm.fileExists(atPath: rcProjectsRoot.appendingPathComponent($0)
+                                                                                 .appendingPathComponent(".git").path) }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private func applyRepoFilter() {
+        let tokens = repoSearchField.stringValue.split(separator: " ").map(String.init)
+        filteredRepos = tokens.isEmpty ? allRepos : allRepos.filter { name in
+            tokens.allSatisfy { name.range(of: $0, options: .caseInsensitive) != nil }
+        }
+        repoTable.reloadData()
+        selectRepoRow(0)
+    }
+
+    private func selectRepoRow(_ index: Int) {
+        guard !filteredRepos.isEmpty else { return }
+        let i = min(max(index, 0), filteredRepos.count - 1)
+        repoTable.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
+        repoTable.scrollRowToVisible(i)
+    }
+
+    private func commitRepoSelection() {
+        let row = repoTable.selectedRow
+        showPicker(false)
+        guard row >= 0, row < filteredRepos.count else { return }
+        let picked = filteredRepos[row]
+        guard picked != rcRepo else { return }
+        rcRepo = picked
+        UserDefaults.standard.set(picked, forKey: rcRepoKey)
+        rcMessage = ""
+        renderRemoteControlUI()
+        restartRemoteControl()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { filteredRepos.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let id = NSUserInterfaceItemIdentifier("repoCell")
+        let cell = (tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView) ?? {
+            let c = NSTableCellView()
+            c.identifier = id
+            let t = NSTextField(labelWithString: "")
+            t.font = .systemFont(ofSize: 12)
+            t.lineBreakMode = .byTruncatingMiddle
+            t.translatesAutoresizingMaskIntoConstraints = false
+            c.addSubview(t)
+            c.textField = t
+            NSLayoutConstraint.activate([
+                t.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 6),
+                t.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -6),
+                t.centerYAnchor.constraint(equalTo: c.centerYAnchor),
+            ])
+            return c
+        }()
+        cell.textField?.stringValue = filteredRepos[row]
+        return cell
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as AnyObject?) === repoSearchField else { return }
+        applyRepoFilter()
+    }
+
+    // Arrow keys drive the list while the caret stays in the search field, so filtering and
+    // choosing are one uninterrupted keystroke sequence.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === repoSearchField else { return false }
+        switch commandSelector {
+        case #selector(NSResponder.moveDown(_:)):        selectRepoRow(repoTable.selectedRow + 1); return true
+        case #selector(NSResponder.moveUp(_:)):          selectRepoRow(repoTable.selectedRow - 1); return true
+        case #selector(NSResponder.insertNewline(_:)):   commitRepoSelection(); return true
+        case #selector(NSResponder.cancelOperation(_:)): showPicker(false); return true
+        default: return false
+        }
+    }
 
     // MARK: - Core state sync
     @objc private func refresh() {
@@ -547,6 +1093,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         headerMark?.contentTintColor = on ? brandAccentSoft : .labelColor
         renderText()
         updateCountdownLabel()
+        syncRemoteControl()
+        renderRemoteControlUI()
     }
 
     // Update text labels only (no pmset subprocess; safe to call on every slider tick).
@@ -688,6 +1236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        stopRemoteControl()   // never leave an orphaned remote-control server behind
+    }
 }
 
 @main
