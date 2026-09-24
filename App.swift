@@ -312,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     private var rcEnabled = true
     private var rcRepo = rcDefaultRepo
     private var rcProcess: Process?
+    private var rcStoppingProcess: Process?
     private var rcStartedAt: Date?
     private var rcAttempt = 0
     private var rcRetryTimer: Timer?
@@ -780,6 +781,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     private func startRemoteControl() {
         guard rcProcess == nil, rcRetryTimer == nil else { return }   // already up, or a retry is pending
+        // A stopped server takes a few seconds to shut its sessions down. Starting the next one
+        // before it is gone would run two at once, and truncate the log under the old one's writes.
+        if let previous = rcStoppingProcess, previous.isRunning {
+            scheduleRemoteControlRetry(after: 1)
+            return
+        }
+        rcStoppingProcess = nil
         guard let claude = resolveClaudeBinary() else {
             failRemoteControl("Couldn\u{2019}t find the claude CLI.")
             return
@@ -845,16 +853,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         rcProcess = nil                      // cleared first: the termination handler now ignores this exit
         rcStartedAt = nil
         rcLog = nil                          // the pipe handler owns it now, and closes it at EOF
+        rcStoppingProcess = process
         process.terminate()                  // SIGTERM; claude shuts down and takes its session children with it
-        let pid = process.processIdentifier
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
-            if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
-        }
+        Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(rcForceKill(_:)),
+                             userInfo: process, repeats: false)
         renderRemoteControlUI()
     }
 
+    // Asks the Process rather than probing a raw pid, which may already belong to someone else.
+    @objc private func rcForceKill(_ timer: Timer) {
+        guard let process = timer.userInfo as? Process, process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+    }
+
     // Changing the repo mid-flight: drop the old server, then start in the new directory
-    // after a beat so the two never overlap.
+    // once it has exited (startRemoteControl waits for it).
     private func restartRemoteControl() {
         guard rcProcess != nil || rcRetryTimer != nil else { return }
         stopRemoteControl()
@@ -871,7 +884,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         rcLog = nil
         NSLog("Sleepless: claude remote-control exited (status %d) after %.0fs", status, uptime)
         guard isOn, rcEnabled else { renderRemoteControlUI(); return }
-        if let reason = fatalRemoteControlReason() {
+        // Only a run that died young can be a setup failure. A long run's log also holds the
+        // session titles, and one that happens to say "not trusted" must not turn the switch off.
+        if uptime < rcHealthyUptime, let reason = fatalRemoteControlReason() {
             failRemoteControl(reason)
             return
         }
@@ -1211,8 +1226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     // MARK: - Notification (mirrors Nexus' osascript approach)
     private func notify(_ message: String) {
-        let script = "display notification \"\(message)\" with title \"Sleepless\" sound name \"Tink\""
-        _ = runCapture("/usr/bin/osascript", ["-e", script])
+        // Passed as an argument, never spliced into the script: messages carry repo folder names.
+        _ = runCapture("/usr/bin/osascript", [
+            "-e", "on run argv",
+            "-e", "display notification (item 1 of argv) with title \"Sleepless\" sound name \"Tink\"",
+            "-e", "end run",
+            message,
+        ])
     }
 
     // MARK: - Process runner (explicit PATH/HOME; captures stdout)

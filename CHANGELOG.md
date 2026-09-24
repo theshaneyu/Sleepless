@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-24
+
+### Fixed
+- A Remote Control server that ran for a while and then dropped (the usual network case)
+  could be misread as a setup failure and turn the switch off. The log it checks also holds
+  session titles, so a title mentioning "not trusted" or "authenticated" was enough. Only a
+  run that dies within two minutes is now checked for a setup failure.
+- Changing the repository, or turning Sleepless off and back on quickly, could start the new
+  server while the old one was still shutting its sessions down. The new one now waits until
+  the old one has exited, so they never overlap or write over each other's log.
+- The five-second force-kill after a stop checks the process itself instead of a raw pid,
+  which could already belong to an unrelated process.
+- Notifications pass the message to `osascript` as an argument instead of splicing it into
+  the script, so a repository folder name containing a quote can no longer break or inject
+  into it.
+
 ## [1.3.0] - 2026-09-09
 
 ### Added
