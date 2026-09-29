@@ -36,9 +36,11 @@ what it writes). `./uninstall.sh` backs it all out and proves the grant is revok
   hand-drawn glyphs, no bundled frameworks.
 - **Zero warnings.** The build must compile clean:
   ```sh
-  swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit App.swift -o /tmp/Sleepless
+  swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit App.swift Core/*.swift -o /tmp/Sleepless
   ```
   CI runs the equivalent compile on every push/PR.
+- **Tests.** Logic that doesn't need AppKit lives in `Core/` and is covered by `swift test`
+  (Swift Testing). `Package.swift` exists only for that; the app is still built by `build.sh`.
 - **Match the surrounding style.** Read `App.swift` first — keep comment density, naming, and
   the "read back the real system state, never assume" discipline.
 - **No personal paths or usernames** in scripts, the sudoers template, or install commands.

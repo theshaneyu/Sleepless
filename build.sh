@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # build.sh — compile Sleepless.app from source with the Command Line Tools only.
 #
-# No Xcode project, no Package.swift: just `swiftc` + a hand-assembled .app bundle,
-# ad-hoc signed. Works from any clone (no hardcoded paths or usernames).
+# No Xcode project: just `swiftc` + a hand-assembled .app bundle, ad-hoc signed.
+# (Package.swift exists only so `swift test` can run the tests; the app never uses it.) Works from any clone (no hardcoded paths or usernames).
 #
 # Usage:
 #   ./build.sh                      # build into ./build/Sleepless.app
@@ -54,10 +54,10 @@ fi
 [ -f "$ICNS" ] || { echo "error: missing $ICNS (run ./build.sh --regen-icon)" >&2; exit 1; }
 
 # 2. Compile the executable.
-echo "==> Compiling App.swift"
+echo "==> Compiling App.swift + Core/"
 BIN_TMP="$(mktemp -d)"
 swiftc -O -parse-as-library -target "$TARGET" -framework AppKit -framework ServiceManagement \
-  "$REPO/App.swift" -o "$BIN_TMP/$APP_NAME"
+  "$REPO/App.swift" "$REPO"/Core/*.swift -o "$BIN_TMP/$APP_NAME"
 
 # 3. Assemble the bundle: Contents/{Info.plist, MacOS/<exe>, Resources/<name>.icns}
 echo "==> Assembling bundle"

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Several Remote Control servers at once.** The Claude Remote Control card now holds a list
+  of up to five repositories, each with its own `claude remote-control` server. **Add
+  repository** opens the searchable picker (repos already in the list are left out), and the
+  − button on a row removes it. Changes to the list apply right away: while Sleepless is on
+  and the Remote Control switch is on, an added repo's server starts and a removed one's
+  stops, without touching the others.
+- A status light on every row: green when the server reports it is connected, yellow while it
+  is starting, connecting, waiting to retry or still shutting down (a stopped server takes a
+  second or two to close its sessions), red when it failed, grey once nothing is running.
+  Hover a row for the full reason.
+- Unit tests (`swift test`) that pin the start and stop rules: servers run only while both
+  Sleepless and the Remote Control switch are on, and turning either one off stops all of
+  them. CI runs them on every push.
+
+### Changed
+- A failure that retrying can't fix now stops only that repo's server and turns its light
+  red. The switch and the other servers stay on; turning the switch off and on retries it.
+  Previously any such failure turned the whole switch off.
+- Each server writes its own log, `~/Library/Logs/Sleepless/remote-control-<repo>.log`.
+- The repository chosen in 1.3.x becomes the first entry in the list. A fresh install starts
+  with an empty list instead of a hardcoded default repo.
+
 ## [1.3.1] - 2026-09-24
 
 ### Fixed

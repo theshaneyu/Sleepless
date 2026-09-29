@@ -30,16 +30,17 @@
 //   3. Low-Power-Mode auto-off — on battery, if Low Power Mode is on, Sleepless
 //      turns itself off. Same shape as the battery floor, evaluated on the same tick.
 //   4. Claude Remote Control — ON by default. While the Mac is kept awake, a supervised
-//      `claude remote-control` child process runs in a repo you pick under ~/Projects, so
-//      new Claude Code sessions can be started from the phone with the lid closed. It is a
-//      child process, not a daemon: it starts and dies with the keep-awake switch, and the
-//      OS reaps it on sleep.
+//      `claude remote-control` child process runs in each repo you add under ~/Projects (up
+//      to five), so new Claude Code sessions can be started from the phone with the lid
+//      closed. They are child processes, not daemons: they start and die with the keep-awake
+//      switch, and the OS reaps them on sleep. The rules live in Core/RemoteControlConfig.swift.
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \
-//          -framework ServiceManagement
+//          -framework ServiceManagement App.swift Core/*.swift
 //   File MUST be named App.swift and compiled -parse-as-library so the
 //   @main enum + @MainActor static main() entry is Swift-6 isolation-safe.
+//   Core/ holds the AppKit-free logic that `swift test` covers.
 import AppKit
 import ServiceManagement
 
@@ -51,14 +52,14 @@ private let floorDefault = 15
 private let floorMin = 5
 private let floorMax = 50
 
-// Claude Remote Control (Feature 4): an optional companion process running
-// `claude remote-control` inside a chosen repo, so a lid-closed Mac can still accept new
-// Claude Code sessions started from the phone. Its lifecycle follows the keep-awake switch —
-// the server exists only while the Mac is kept awake, and macOS reaping it on sleep is
+// Claude Remote Control (Feature 4): optional companion processes running
+// `claude remote-control` inside chosen repos, so a lid-closed Mac can still accept new
+// Claude Code sessions started from the phone. Their lifecycle follows the keep-awake switch —
+// the servers exist only while the Mac is kept awake, and macOS reaping them on sleep is
 // exactly the wanted behaviour, so no extra teardown is needed for the auto-off timer.
 private let rcEnabledKey = "remoteControlEnabled"
-private let rcRepoKey = "remoteControlRepo"
-private let rcDefaultRepo = "inLineAPI"
+private let rcReposKey = "remoteControlRepos"
+private let rcLegacyRepoKey = "remoteControlRepo"   // the single repo of 1.3.x, migrated on launch
 private let rcProjectsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects")
 // Supervisor backoff. `claude remote-control` exits on its own after roughly 10 minutes
 // without network, so a short outage must not need a manual restart — but a permanently
@@ -105,9 +106,13 @@ private final class RemoteControlLog {
     private var pending = ""
     private var lastFrame = ""
     private var written = 0
+    private var linked: Bool?
+    private let onLink: @Sendable (Bool) -> Void
 
-    // Truncated per run: only the current server's output matters.
-    init(url: URL) {
+    // Truncated per run: only the current server's output matters. `onLink` hears, off the main
+    // thread, each time the status line flips between connected and not.
+    init(url: URL, onLink: @escaping @Sendable (Bool) -> Void) {
+        self.onLink = onLink
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -160,6 +165,10 @@ private final class RemoteControlLog {
         let body = text.joined(separator: "\n")
         guard body != lastFrame else { return }
         lastFrame = body
+        if let link = remoteControlLinkState(in: body), link != linked {
+            linked = link
+            onLink(link)
+        }
         let stamp = rcLogTimeFormatter.string(from: Date())
         write(text.map { "[\(stamp)] \($0)\n" }.joined())
     }
@@ -274,6 +283,284 @@ private final class CardView: NSView {
     }
 }
 
+// A traffic-light dot for one Remote Control server. System colours, so it follows light/dark.
+private final class StatusDot: NSView {
+    var indicator = RemoteControlIndicator.off { didSet { if indicator != oldValue { needsDisplay = true } } }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let color: NSColor = switch indicator {
+        case .off: .tertiaryLabelColor
+        case .stopping, .pending: .systemYellow
+        case .connected: .systemGreen
+        case .failed: .systemRed
+        }
+        layer?.backgroundColor = color.cgColor
+        layer?.cornerRadius = bounds.height / 2
+    }
+}
+
+// One repo in the Remote Control card: light, name, a short state word, and a remove button.
+private final class RemoteControlRow: NSView {
+    override var isFlipped: Bool { true }
+    let removeButton: NSButton
+    private let dot = StatusDot(frame: NSRect(x: 2, y: 7, width: 8, height: 8))
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+
+    init(frame: NSRect, target: AnyObject, removeAction: Selector) {
+        removeButton = NSButton(image: NSImage(systemSymbolName: "minus.circle",
+                                               accessibilityDescription: "Remove repository") ?? NSImage(),
+                                target: target, action: removeAction)
+        super.init(frame: frame)
+        dot.wantsLayer = true
+        addSubview(dot)
+        let w = frame.width, detailW: CGFloat = 80, removeW: CGFloat = 20
+        nameLabel.font = .systemFont(ofSize: 12)
+        nameLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.frame = NSRect(x: 16, y: 3, width: w - 16 - detailW - removeW - 8, height: 16)
+        addSubview(nameLabel)
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.alignment = .right
+        detailLabel.frame = NSRect(x: w - removeW - 4 - detailW, y: 4, width: detailW, height: 14)
+        addSubview(detailLabel)
+        removeButton.isBordered = false
+        removeButton.contentTintColor = .secondaryLabelColor
+        removeButton.toolTip = "Remove"
+        removeButton.frame = NSRect(x: w - removeW, y: 1, width: removeW, height: 20)
+        addSubview(removeButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func show(repo: String, indicator: RemoteControlIndicator, detail: String, tooltip: String) {
+        dot.indicator = indicator
+        nameLabel.stringValue = repo
+        detailLabel.stringValue = detail
+        toolTip = tooltip
+    }
+}
+
+// A GUI app inherits no shell PATH, so the CLI is found by probing where it installs.
+private func resolveClaudeBinary() -> String? {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let candidates = ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
+                      "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "/usr/bin/claude"]
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+// One supervised `claude remote-control` child for one repo. Whether it SHOULD run is not its
+// call: AppDelegate applies RemoteControlConfig and only tells it to start or stop. A failure
+// retrying can't fix goes back through `onFatal`, so one broken repo never stops the others.
+@MainActor
+private final class RemoteControlServer: NSObject {
+    let repo: String
+    private let onChange: () -> Void
+    private let onFatal: (String) -> Void
+    private var process: Process?
+    private var stoppingProcess: Process?
+    private var startedAt: Date?
+    private var attempt = 0
+    private var retryTimer: Timer?
+    private var retryDeadline: Date?
+    private var log: RemoteControlLog?
+    private var run = 0                     // tells a live run's link reports from a stopped one's
+    private(set) var connected = false
+
+    init(repo: String, onChange: @escaping () -> Void, onFatal: @escaping (String) -> Void) {
+        self.repo = repo
+        self.onChange = onChange
+        self.onFatal = onFatal
+    }
+
+    var isStopping: Bool { stoppingProcess?.isRunning == true }
+
+    var progressText: String {
+        if let end = retryDeadline {
+            let s = max(Int(end.timeIntervalSinceNow.rounded()), 1)
+            return attempt > 0 ? "Retry in \(s)s" : "Starting\u{2026}"   // no attempt: waiting on the old one
+        }
+        if process != nil { return connected ? "Connected" : "Connecting\u{2026}" }
+        return "Starting\u{2026}"
+    }
+
+    var progressTooltip: String {
+        guard let end = retryDeadline, attempt > 0 else { return "~/Projects/\(repo)" }
+        let s = max(Int(end.timeIntervalSinceNow.rounded()), 1)
+        return "Reconnecting in \(s)s (attempt \(attempt) of \(rcBackoffDelays.count))."
+    }
+
+    func start() {
+        guard process == nil, retryTimer == nil else { return }   // already up, or a retry is pending
+        // A stopped server takes a few seconds to shut its sessions down. Starting the next one
+        // before it is gone would run two at once, and truncate the log under the old one's writes.
+        if isStopping {
+            scheduleRetry(after: 1)
+            return
+        }
+        stoppingProcess = nil
+        guard let claude = resolveClaudeBinary() else {
+            fail("Couldn\u{2019}t find the claude CLI.")
+            return
+        }
+        let cwd = rcProjectsRoot.appendingPathComponent(repo)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDir), isDir.boolValue else {
+            fail("No longer in ~/Projects.")
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claude)
+        process.arguments = ["remote-control"]
+        process.currentDirectoryURL = cwd     // sessions are created here, so the repo IS the setting
+        var env = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        env["HOME"] = home
+        env["ANTHROPIC_API_KEY"] = nil        // Remote Control requires the claude.ai login; an API key blocks it
+        process.environment = env
+        process.standardInput = FileHandle.nullDevice   // no TTY: server mode runs fine, it just can\u{2019}t show its QR code
+        // A Pipe rather than the log file directly, so the TUI repaints are filtered out on the
+        // way through instead of piling up on disk. The handler drains it, so the child never
+        // blocks on a full 64 KB buffer.
+        run += 1
+        let thisRun = run
+        let log = RemoteControlLog(url: logURL) { [weak self] linked in
+            Task { @MainActor in self?.linkChanged(linked, run: thisRun) }
+        }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            guard !data.isEmpty else {          // EOF: the child is gone
+                fh.readabilityHandler = nil
+                log.finish()
+                return
+            }
+            log.ingest(data)
+        }
+        self.log = log
+        // Fires off the main thread; the pid is all we carry back, which also identifies
+        // WHICH process died (a deliberate stop clears `process` first, so its exit is ignored).
+        process.terminationHandler = { [weak self] proc in
+            let pid = proc.processIdentifier, status = proc.terminationStatus
+            Task { @MainActor in self?.didExit(pid: pid, status: status) }
+        }
+        do { try process.run() }
+        catch {
+            NSLog("Sleepless: failed to launch claude remote-control in %@: %@", repo, error.localizedDescription)
+            fail("Couldn\u{2019}t start claude remote-control.")
+            return
+        }
+        self.process = process
+        startedAt = Date()
+        connected = false
+        onChange()
+    }
+
+    func stop() {
+        retryTimer?.invalidate(); retryTimer = nil
+        retryDeadline = nil
+        attempt = 0
+        connected = false
+        guard let process else { return }
+        self.process = nil                   // cleared first: the termination handler now ignores this exit
+        startedAt = nil
+        log = nil                            // the pipe handler owns it now, and closes it at EOF
+        stoppingProcess = process
+        process.terminate()                  // SIGTERM; claude shuts down and takes its session children with it
+        Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(forceKill(_:)),
+                             userInfo: process, repeats: false)
+        onChange()
+    }
+
+    // Asks the Process rather than probing a raw pid, which may already belong to someone else.
+    @objc private func forceKill(_ timer: Timer) {
+        guard let process = timer.userInfo as? Process, process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+    }
+
+    private func linkChanged(_ linked: Bool, run: Int) {
+        guard run == self.run, process != nil else { return }
+        connected = linked
+        onChange()
+    }
+
+    private func didExit(pid: Int32, status: Int32) {
+        if stoppingProcess?.processIdentifier == pid {   // a deliberate stop has finished: the light can go grey
+            stoppingProcess = nil
+            onChange()
+            return
+        }
+        guard let current = process, current.processIdentifier == pid else { return }
+        let uptime = startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        process = nil
+        startedAt = nil
+        connected = false
+        log?.flush()                         // fatalReason() reads the file, so finish writing it first
+        log = nil
+        NSLog("Sleepless: claude remote-control in %@ exited (status %d) after %.0fs", repo, status, uptime)
+        // Only a run that died young can be a setup failure. A long run's log also holds the
+        // session titles, and one that happens to say "not trusted" must not stop the server.
+        if uptime < rcHealthyUptime, let reason = fatalReason() {
+            fail(reason)
+            return
+        }
+        if uptime >= rcHealthyUptime { attempt = 0 }   // a long healthy run earns a fresh retry budget
+        guard attempt < rcBackoffDelays.count else {
+            fail("Kept stopping, so Sleepless gave up.")
+            return
+        }
+        let delay = rcBackoffDelays[attempt] * Double.random(in: 0.8...1.2)   // jitter
+        attempt += 1
+        scheduleRetry(after: delay)
+    }
+
+    private func scheduleRetry(after delay: TimeInterval) {
+        retryTimer?.invalidate()
+        retryDeadline = Date().addingTimeInterval(delay)
+        retryTimer = Timer.scheduledTimer(timeInterval: delay, target: self,
+                                          selector: #selector(retryFired), userInfo: nil, repeats: false)
+        onChange()
+    }
+
+    @objc private func retryFired() {
+        retryTimer = nil
+        retryDeadline = nil
+        start()
+        onChange()
+    }
+
+    // Retrying can\u{2019}t fix an untrusted workspace or a missing claude.ai login, and the CLI says
+    // so on stderr. Reading the tail turns five silent retries into one actionable message.
+    private func fatalReason() -> String? {
+        guard let data = try? Data(contentsOf: logURL) else { return nil }
+        let tail = String(decoding: data.suffix(4096), as: UTF8.self)
+        func mentions(_ s: String) -> Bool { tail.range(of: s, options: .caseInsensitive) != nil }
+        if mentions("not trusted") { return "Run claude there once to trust it." }
+        if mentions("full-scope login") || mentions("authenticated") || mentions("auth login") {
+            return "Needs a claude.ai login (claude auth login)."
+        }
+        if mentions("Remote Control is not available") { return "Remote Control isn\u{2019}t enabled for this account." }
+        return nil
+    }
+
+    private func fail(_ reason: String) {
+        retryTimer?.invalidate(); retryTimer = nil
+        retryDeadline = nil
+        attempt = 0
+        onFatal(reason)
+    }
+
+    // Repo names are folder names under ~/Projects, so they are safe as a file-name suffix.
+    private var logURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Sleepless/remote-control-\(repo).log")
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate,
                          NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
@@ -307,18 +594,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     // Claude Remote Control (Feature 4)
     private var rcSwitch: NSSwitch!
-    private var rcRepoButton: NSButton!
+    private var rcCard: CardView!
+    private var rcRows: [RemoteControlRow] = []
+    private var rcAddButton: NSButton!
+    private var rcCountLabel: NSTextField!
     private var rcStatusLabel: NSTextField!
-    private var rcEnabled = true
-    private var rcRepo = rcDefaultRepo
-    private var rcProcess: Process?
-    private var rcStoppingProcess: Process?
-    private var rcStartedAt: Date?
-    private var rcAttempt = 0
-    private var rcRetryTimer: Timer?
-    private var rcRetryDeadline: Date?
-    private var rcMessage = ""
-    private var rcLog: RemoteControlLog?
+    private var loginCard: CardView!        // follows the Remote Control card as its list grows
+    private var quitButton: NSButton!
+    private var rcConfig = RemoteControlConfig(enabled: true, repos: [])
+    private var rcServers: [String: RemoteControlServer] = [:]
 
     // Searchable repo picker (second page of the popover)
     private var settingsPage: FlippedView!
@@ -329,13 +613,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     private var filteredRepos: [String] = []
 
     private let popoverWidth: CGFloat = 320
-    private let popoverHeight: CGFloat = 544
+    private let popoverHeight: CGFloat = 544   // at launch; layoutRemoteControlCard() sizes it to the repo list
+    private let rcRowsTop: CGFloat = 42        // inside the Remote Control card, below its switch row
+    private let rcRowHeight: CGFloat = 24
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         batteryFloorPercent = min(max((UserDefaults.standard.object(forKey: floorKey) as? Int) ?? floorDefault, floorMin), floorMax)
-        rcEnabled = (UserDefaults.standard.object(forKey: rcEnabledKey) as? Bool) ?? true   // ON by default
-        rcRepo = UserDefaults.standard.string(forKey: rcRepoKey) ?? rcDefaultRepo
+        let defaults = UserDefaults.standard
+        rcConfig = .load(enabled: defaults.object(forKey: rcEnabledKey) as? Bool,
+                         repos: defaults.stringArray(forKey: rcReposKey),
+                         legacyRepo: defaults.string(forKey: rcLegacyRepoKey))
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = offGlyph
@@ -346,6 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         popover.animates = true
         popover.contentSize = NSSize(width: popoverWidth, height: popoverHeight)
         popover.contentViewController = makeContentController()
+        layoutRemoteControlCard()
 
         refresh()   // reflect TRUE system state on launch (never a stale assumption)
         timer = Timer.scheduledTimer(timeInterval: pollInterval, target: self,
@@ -461,31 +750,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         maxHint.frame = NSRect(x: contentW - ci - 34, y: ci + 50, width: 34, height: 13)
         g3.addSubview(maxHint)
 
-        // GROUP 4 — Claude Remote Control companion (ON by default), plus the repo its
-        // sessions open in. Turning it off here terminates the server immediately.
-        let g4y = g3y + g3h + 12, g4h: CGFloat = 100
-        let g4 = makeCard(NSRect(x: pad, y: g4y, width: contentW, height: g4h))
+        // GROUP 4 — Claude Remote Control companion (ON by default): up to rcMaxServers repos,
+        // one server each, every row with its own status light. Turning the switch off here
+        // terminates every server immediately. The card grows with the list, so its lower
+        // half and everything under it are placed by layoutRemoteControlCard().
+        let g4y = g3y + g3h + 12
+        let g4 = makeCard(NSRect(x: pad, y: g4y, width: contentW, height: 100))
+        rcCard = g4
         let rcLabel = makeLabel("Claude Remote Control", font: .systemFont(ofSize: 13), color: .labelColor)
         rcLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
         g4.addSubview(rcLabel)
         rcSwitch = NSSwitch()
         rcSwitch.target = self
         rcSwitch.action = #selector(rcToggled(_:))
-        rcSwitch.state = rcEnabled ? .on : .off
+        rcSwitch.state = rcConfig.enabled ? .on : .off
         rcSwitch.frame = NSRect(x: contentW - ci - swW, y: ci + (22 - swH) / 2, width: swW, height: swH)
         g4.addSubview(rcSwitch)
-        let repoLabel = makeLabel("Repository", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        repoLabel.frame = NSRect(x: ci, y: ci + 34, width: 74, height: 22)
-        g4.addSubview(repoLabel)
-        rcRepoButton = NSButton(title: rcRepo, target: self, action: #selector(chooseRepo))
-        rcRepoButton.bezelStyle = .rounded
-        rcRepoButton.controlSize = .small
-        rcRepoButton.font = .systemFont(ofSize: 12)
-        rcRepoButton.cell?.lineBreakMode = .byTruncatingMiddle
-        rcRepoButton.frame = NSRect(x: ci + 78, y: ci + 32, width: cw - 78, height: 22)
-        g4.addSubview(rcRepoButton)
+        rcRows = (0..<rcMaxServers).map { i in
+            let row = RemoteControlRow(frame: NSRect(x: ci, y: rcRowsTop + CGFloat(i) * rcRowHeight, width: cw, height: 22),
+                                       target: self, removeAction: #selector(removeRepoClicked(_:)))
+            row.removeButton.tag = i
+            row.isHidden = true
+            g4.addSubview(row)
+            return row
+        }
+        rcAddButton = NSButton(title: "Add repository",
+                               image: NSImage(systemSymbolName: "plus", accessibilityDescription: nil) ?? NSImage(),
+                               target: self, action: #selector(addRepoClicked))
+        rcAddButton.imagePosition = .imageLeading
+        rcAddButton.bezelStyle = .rounded
+        rcAddButton.controlSize = .small
+        rcAddButton.font = .systemFont(ofSize: 11)
+        rcAddButton.sizeToFit()
+        rcAddButton.frame = NSRect(x: ci, y: 0, width: rcAddButton.frame.width + 6, height: 20)
+        g4.addSubview(rcAddButton)
+        rcCountLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .tertiaryLabelColor)
+        rcCountLabel.alignment = .right
+        rcCountLabel.frame = NSRect(x: contentW - ci - 60, y: 0, width: 60, height: 14)
+        g4.addSubview(rcCountLabel)
         rcStatusLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
-        rcStatusLabel.frame = NSRect(x: ci, y: ci + 62, width: cw, height: 26)
+        rcStatusLabel.frame = NSRect(x: ci, y: 0, width: cw, height: 28)
         rcStatusLabel.usesSingleLineMode = false
         rcStatusLabel.lineBreakMode = .byWordWrapping
         rcStatusLabel.maximumNumberOfLines = 2
@@ -493,8 +797,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         g4.addSubview(rcStatusLabel)
 
         // GROUP 5 — launch at login (off by default; never auto-enables sleep prevention)
-        let g5y = g4y + g4h + 12, g5h: CGFloat = 46
-        let g5 = makeCard(NSRect(x: pad, y: g5y, width: contentW, height: g5h))
+        let g5h: CGFloat = 46
+        let g5 = makeCard(NSRect(x: pad, y: 0, width: contentW, height: g5h))
+        loginCard = g5
         let loginLabel = makeLabel("Launch at login", font: .systemFont(ofSize: 13), color: .labelColor)
         loginLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
         g5.addSubview(loginLabel)
@@ -511,8 +816,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         quit.bezelStyle = .rounded
         quit.sizeToFit()
         let qs = quit.frame.size
-        quit.frame = NSRect(x: W - pad - qs.width, y: g5y + g5h + 12, width: qs.width, height: qs.height)
+        quit.frame = NSRect(x: W - pad - qs.width, y: 0, width: qs.width, height: qs.height)
         page.addSubview(quit)
+        quitButton = quit
 
         // PAGE 2 — repo picker. ~40 repos under ~/Projects is far too many for a menu, so
         // this is a search field over a plain list: type any substrings, all must match.
@@ -524,7 +830,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         back.sizeToFit()
         back.frame = NSRect(x: pad, y: 14, width: max(back.frame.width, 62), height: 20)
         picker.addSubview(back)
-        let pickTitle = makeLabel("Choose repository", font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor)
+        let pickTitle = makeLabel("Add repository", font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor)
         pickTitle.alignment = .right
         pickTitle.frame = NSRect(x: pad + 70, y: 14, width: contentW - 70, height: 20)
         picker.addSubview(pickTitle)
@@ -550,17 +856,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         table.action = #selector(repoRowClicked)
         repoTable = table
         let scroll = NSScrollView(frame: NSRect(x: pad, y: 78, width: contentW, height: popoverHeight - 78 - pad))
+        scroll.autoresizingMask = [.height]    // the popover's height follows the repo list
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         picker.addSubview(scroll)
+        picker.autoresizingMask = [.height]
+        page.autoresizingMask = [.height]
         root.addSubview(picker)
         pickerPage = picker
 
         let vc = NSViewController()
         vc.view = root
         return vc
+    }
+
+    // Everything from the Remote Control list down moves with the number of repos in it.
+    private func layoutRemoteControlCard() {
+        guard let rcCard, let loginCard, let quitButton else { return }
+        let addY = rcRowsTop + CGFloat(rcConfig.repos.count) * rcRowHeight
+        rcAddButton.frame.origin.y = addY
+        rcCountLabel.frame.origin.y = addY + 3
+        rcStatusLabel.frame.origin.y = addY + 28
+        rcCard.frame.size.height = rcStatusLabel.frame.maxY + 8
+        loginCard.frame.origin.y = rcCard.frame.maxY + 12
+        quitButton.frame.origin.y = loginCard.frame.maxY + 12
+        popover.contentSize = NSSize(width: popoverWidth, height: quitButton.frame.maxY + 16)
     }
 
     private func makeLabel(_ s: String, font: NSFont, color: NSColor) -> NSTextField {
@@ -735,7 +1057,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     @objc private func countdownTick() {
         updateCountdownLabel()
-        rcStatusLabel?.stringValue = remoteControlStatusText()
+        renderRemoteControlUI()
     }
 
     private func updateCountdownLabel() {
@@ -762,228 +1084,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     private func loginItemEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
 
     // MARK: - Claude Remote Control (Feature 4)
-    // A supervised child process running `claude remote-control` in the chosen repo. It is a
-    // preference, not an independent switch: the server runs only while the Mac is kept awake,
-    // so closing the lid keeps remote sessions reachable and every existing auto-off path
-    // (timer, battery floor, Low Power Mode, manual toggle) tears it down for free.
+    // One supervised `claude remote-control` child per listed repo. It is a preference, not an
+    // independent switch: servers run only while the Mac is kept awake, so closing the lid keeps
+    // remote sessions reachable and every existing auto-off path (timer, battery floor, Low
+    // Power Mode, manual toggle) tears them all down for free. RemoteControlConfig decides WHICH
+    // repos should run; this section only makes the running set match it.
     @objc private func rcToggled(_ sender: NSSwitch) {
-        rcEnabled = sender.state == .on
-        UserDefaults.standard.set(rcEnabled, forKey: rcEnabledKey)
-        rcMessage = ""
-        rcAttempt = 0
+        rcConfig.setEnabled(sender.state == .on)
+        saveRemoteControlConfig()
         syncRemoteControl()
         renderRemoteControlUI()
     }
 
-    private func syncRemoteControl() {
-        if isOn && rcEnabled { startRemoteControl() } else { stopRemoteControl() }
-    }
-
-    private func startRemoteControl() {
-        guard rcProcess == nil, rcRetryTimer == nil else { return }   // already up, or a retry is pending
-        // A stopped server takes a few seconds to shut its sessions down. Starting the next one
-        // before it is gone would run two at once, and truncate the log under the old one's writes.
-        if let previous = rcStoppingProcess, previous.isRunning {
-            scheduleRemoteControlRetry(after: 1)
-            return
-        }
-        rcStoppingProcess = nil
-        guard let claude = resolveClaudeBinary() else {
-            failRemoteControl("Couldn\u{2019}t find the claude CLI.")
-            return
-        }
-        let cwd = rcProjectsRoot.appendingPathComponent(rcRepo)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDir), isDir.boolValue else {
-            failRemoteControl("\(rcRepo) is no longer in ~/Projects.")
-            return
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: claude)
-        process.arguments = ["remote-control"]
-        process.currentDirectoryURL = cwd     // sessions are created here, so the repo IS the setting
-        var env = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        env["HOME"] = home
-        env["ANTHROPIC_API_KEY"] = nil        // Remote Control requires the claude.ai login; an API key blocks it
-        process.environment = env
-        process.standardInput = FileHandle.nullDevice   // no TTY: server mode runs fine, it just can\u{2019}t show its QR code
-        // A Pipe rather than the log file directly, so the TUI repaints are filtered out on the
-        // way through instead of piling up on disk. The handler drains it, so the child never
-        // blocks on a full 64 KB buffer.
-        let log = RemoteControlLog(url: remoteControlLogURL())
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        pipe.fileHandleForReading.readabilityHandler = { fh in
-            let data = fh.availableData
-            guard !data.isEmpty else {          // EOF: the child is gone
-                fh.readabilityHandler = nil
-                log.finish()
-                return
-            }
-            log.ingest(data)
-        }
-        rcLog = log
-        // Fires off the main thread; the pid is all we carry back, which also identifies
-        // WHICH process died (a deliberate stop clears rcProcess first, so its exit is ignored).
-        process.terminationHandler = { [weak self] proc in
-            let pid = proc.processIdentifier, status = proc.terminationStatus
-            Task { @MainActor in self?.remoteControlDidExit(pid: pid, status: status) }
-        }
-        do { try process.run() }
-        catch {
-            NSLog("Sleepless: failed to launch claude remote-control: %@", error.localizedDescription)
-            failRemoteControl("Couldn\u{2019}t start claude remote-control.")
-            return
-        }
-        rcProcess = process
-        rcStartedAt = Date()
-        rcMessage = ""
-        renderRemoteControlUI()
-    }
-
-    private func stopRemoteControl() {
-        rcRetryTimer?.invalidate(); rcRetryTimer = nil
-        rcRetryDeadline = nil
-        rcAttempt = 0
-        guard let process = rcProcess else { return }
-        rcProcess = nil                      // cleared first: the termination handler now ignores this exit
-        rcStartedAt = nil
-        rcLog = nil                          // the pipe handler owns it now, and closes it at EOF
-        rcStoppingProcess = process
-        process.terminate()                  // SIGTERM; claude shuts down and takes its session children with it
-        Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(rcForceKill(_:)),
-                             userInfo: process, repeats: false)
-        renderRemoteControlUI()
-    }
-
-    // Asks the Process rather than probing a raw pid, which may already belong to someone else.
-    @objc private func rcForceKill(_ timer: Timer) {
-        guard let process = timer.userInfo as? Process, process.isRunning else { return }
-        kill(process.processIdentifier, SIGKILL)
-    }
-
-    // Changing the repo mid-flight: drop the old server, then start in the new directory
-    // once it has exited (startRemoteControl waits for it).
-    private func restartRemoteControl() {
-        guard rcProcess != nil || rcRetryTimer != nil else { return }
-        stopRemoteControl()
-        scheduleRemoteControlRetry(after: 2)
-    }
-
-    @MainActor
-    private func remoteControlDidExit(pid: Int32, status: Int32) {
-        guard let current = rcProcess, current.processIdentifier == pid else { return }
-        let uptime = rcStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        rcProcess = nil
-        rcStartedAt = nil
-        rcLog?.flush()                       // fatalRemoteControlReason() reads the file, so finish writing it first
-        rcLog = nil
-        NSLog("Sleepless: claude remote-control exited (status %d) after %.0fs", status, uptime)
-        guard isOn, rcEnabled else { renderRemoteControlUI(); return }
-        // Only a run that died young can be a setup failure. A long run's log also holds the
-        // session titles, and one that happens to say "not trusted" must not turn the switch off.
-        if uptime < rcHealthyUptime, let reason = fatalRemoteControlReason() {
-            failRemoteControl(reason)
-            return
-        }
-        if uptime >= rcHealthyUptime { rcAttempt = 0 }   // a long healthy run earns a fresh retry budget
-        guard rcAttempt < rcBackoffDelays.count else {
-            failRemoteControl("Claude Remote Control kept stopping. Turned it off.")
-            return
-        }
-        let delay = rcBackoffDelays[rcAttempt] * Double.random(in: 0.8...1.2)   // jitter
-        rcAttempt += 1
-        scheduleRemoteControlRetry(after: delay)
-    }
-
-    private func scheduleRemoteControlRetry(after delay: TimeInterval) {
-        rcRetryTimer?.invalidate()
-        rcRetryDeadline = Date().addingTimeInterval(delay)
-        rcRetryTimer = Timer.scheduledTimer(timeInterval: delay, target: self,
-                                            selector: #selector(rcRetryFired), userInfo: nil, repeats: false)
-        renderRemoteControlUI()
-    }
-
-    @objc private func rcRetryFired() {
-        rcRetryTimer = nil
-        rcRetryDeadline = nil
-        syncRemoteControl()
-        renderRemoteControlUI()
-    }
-
-    // Retrying can\u{2019}t fix an untrusted workspace or a missing claude.ai login, and the CLI says
-    // so on stderr. Reading the tail turns five silent retries into one actionable message.
-    private func fatalRemoteControlReason() -> String? {
-        guard let data = try? Data(contentsOf: remoteControlLogURL()) else { return nil }
-        let tail = String(decoding: data.suffix(4096), as: UTF8.self)
-        func mentions(_ s: String) -> Bool { tail.range(of: s, options: .caseInsensitive) != nil }
-        if mentions("not trusted") { return "Run claude once in ~/Projects/\(rcRepo) to trust it." }
-        if mentions("full-scope login") || mentions("authenticated") || mentions("auth login") {
-            return "Claude Remote Control needs a claude.ai login (claude auth login)."
-        }
-        if mentions("Remote Control is not available") { return "Remote Control isn\u{2019}t enabled for this account." }
-        return nil
-    }
-
-    // Give up: stop retrying and flip the switch off, so what the popover shows is what is
-    // actually running. Flipping it back on is the retry.
-    private func failRemoteControl(_ message: String) {
-        rcRetryTimer?.invalidate(); rcRetryTimer = nil
-        rcRetryDeadline = nil
-        rcAttempt = 0
-        rcEnabled = false
-        UserDefaults.standard.set(false, forKey: rcEnabledKey)
-        rcMessage = message
-        renderRemoteControlUI()
-        notify(message)
-    }
-
-    private func remoteControlStatusText() -> String {
-        if !rcMessage.isEmpty { return rcMessage }
-        if !rcEnabled { return "Off. Sleepless won\u{2019}t start a remote session." }
-        if let end = rcRetryDeadline {
-            let s = max(Int(end.timeIntervalSinceNow.rounded()), 1)
-            guard rcAttempt > 0 else { return "Restarting in \(s)s\u{2026}" }   // repo change, not a failure
-            return "Reconnecting in \(s)s (attempt \(rcAttempt) of \(rcBackoffDelays.count))."
-        }
-        if rcProcess != nil { return "Running. Start a session from the Claude app." }
-        return isOn ? "Starting\u{2026}" : "Starts when you turn Sleepless on."
-    }
-
-    private func renderRemoteControlUI() {
-        rcSwitch?.state = rcEnabled ? .on : .off
-        rcRepoButton?.title = rcRepo
-        rcStatusLabel?.stringValue = remoteControlStatusText()
-    }
-
-    // A GUI app inherits no shell PATH, so the CLI is found by probing where it installs.
-    private func resolveClaudeBinary() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
-                          "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "/usr/bin/claude"]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
-    private func remoteControlLogURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Sleepless/remote-control.log")
-    }
-
-    // MARK: - Repo picker (page 2)
-    @objc private func chooseRepo() {
-        allRepos = scanRepos()
+    @objc private func addRepoClicked() {
+        allRepos = scanRepos().filter { !rcConfig.repos.contains($0) }
         repoSearchField.stringValue = ""
         filteredRepos = allRepos
         repoTable.reloadData()
-        selectRepoRow(filteredRepos.firstIndex(of: rcRepo) ?? 0)
+        selectRepoRow(0)
         showPicker(true)
         repoSearchField.window?.makeFirstResponder(repoSearchField)
     }
 
+    @objc private func removeRepoClicked(_ sender: NSButton) {
+        guard sender.tag < rcConfig.repos.count else { return }
+        rcConfig.removeRepo(rcConfig.repos[sender.tag])
+        remoteControlListChanged()
+    }
+
+    private func remoteControlListChanged() {
+        saveRemoteControlConfig()
+        syncRemoteControl()
+        layoutRemoteControlCard()
+        renderRemoteControlUI()
+    }
+
+    private func saveRemoteControlConfig() {
+        UserDefaults.standard.set(rcConfig.enabled, forKey: rcEnabledKey)
+        UserDefaults.standard.set(rcConfig.repos, forKey: rcReposKey)
+    }
+
+    private func syncRemoteControl() {
+        let wanted = rcConfig.reposToRun(keepAwake: isOn)
+        for (repo, server) in rcServers where !wanted.contains(repo) {
+            server.stop()
+            // A removed repo's server is kept until its process is gone, so re-adding the repo
+            // meanwhile still waits for the old one to exit.
+            if !rcConfig.repos.contains(repo), !server.isStopping { rcServers[repo] = nil }
+        }
+        wanted.forEach { remoteControlServer(for: $0).start() }
+    }
+
+    private func remoteControlServer(for repo: String) -> RemoteControlServer {
+        if let server = rcServers[repo] { return server }
+        let server = RemoteControlServer(
+            repo: repo,
+            onChange: { [weak self] in self?.renderRemoteControlUI() },
+            onFatal: { [weak self] reason in self?.remoteControlFailed(repo, reason: reason) })
+        rcServers[repo] = server
+        return server
+    }
+
+    // Stops just this repo and reports why; the switch and the other servers stay as they are.
+    // Flipping the switch off and on is the retry.
+    private func remoteControlFailed(_ repo: String, reason: String) {
+        rcConfig.markFailed(repo, reason: reason)
+        syncRemoteControl()
+        renderRemoteControlUI()
+        notify("\(repo): \(reason)")
+    }
+
+    private func remoteControlCaption() -> String {
+        if let repo = rcConfig.repos.first(where: { rcConfig.failures[$0] != nil }),
+           let reason = rcConfig.failures[repo] {
+            return "\(repo): \(reason)"
+        }
+        if rcConfig.repos.isEmpty { return "Add a repository to run a server in it." }
+        if !rcConfig.enabled { return "Off. Sleepless won\u{2019}t start a remote session." }
+        return isOn ? "Start a session from the Claude app." : "Starts when you turn Sleepless on."
+    }
+
+    private func renderRemoteControlUI() {
+        rcSwitch?.state = rcConfig.enabled ? .on : .off
+        for (i, row) in rcRows.enumerated() {
+            row.isHidden = i >= rcConfig.repos.count
+            guard !row.isHidden else { continue }
+            let repo = rcConfig.repos[i]
+            let server = rcServers[repo]
+            let indicator = rcConfig.indicator(for: repo, keepAwake: isOn, connected: server?.connected ?? false,
+                                               stopping: server?.isStopping ?? false)
+            let detail = switch indicator {
+            case .off: ""
+            case .stopping: "Stopping\u{2026}"
+            case .pending: server?.progressText ?? "Starting\u{2026}"
+            case .connected: "Connected"
+            case .failed: "Failed"
+            }
+            row.show(repo: repo, indicator: indicator, detail: detail,
+                     tooltip: rcConfig.failures[repo] ?? server?.progressTooltip ?? "~/Projects/\(repo)")
+        }
+        rcAddButton?.isEnabled = rcConfig.canAddRepo
+        rcCountLabel?.stringValue = "\(rcConfig.repos.count) of \(rcMaxServers)"
+        rcStatusLabel?.stringValue = remoteControlCaption()
+    }
+
+    // MARK: - Repo picker (page 2)
     @objc private func cancelRepoPick() { showPicker(false) }
 
     @objc private func repoRowClicked() { commitRepoSelection() }
@@ -1022,13 +1227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         let row = repoTable.selectedRow
         showPicker(false)
         guard row >= 0, row < filteredRepos.count else { return }
-        let picked = filteredRepos[row]
-        guard picked != rcRepo else { return }
-        rcRepo = picked
-        UserDefaults.standard.set(picked, forKey: rcRepoKey)
-        rcMessage = ""
-        renderRemoteControlUI()
-        restartRemoteControl()
+        guard rcConfig.addRepo(filteredRepos[row]) else { return }
+        remoteControlListChanged()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { filteredRepos.count }
@@ -1258,7 +1458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     @objc private func quit() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
-        stopRemoteControl()   // never leave an orphaned remote-control server behind
+        rcServers.values.forEach { $0.stop() }   // never leave an orphaned remote-control server behind
     }
 }
 
