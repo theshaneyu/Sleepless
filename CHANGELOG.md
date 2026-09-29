@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is starting, connecting, waiting to retry or still shutting down (a stopped server takes a
   second or two to close its sessions), red when it failed, grey once nothing is running.
   Hover a row for the full reason.
+- **`sleepless://off`.** Opening this URL (`open -g sleepless://off`) turns the main switch
+  off, exactly like flipping it in the popover, so scripts and agents can let the Mac sleep
+  again. Only turning off is exposed: no URL can keep the Mac awake.
 - Unit tests (`swift test`) that pin the start and stop rules: servers run only while both
   Sleepless and the Remote Control switch are on, and turning either one off stops all of
   them. CI runs them on every push.

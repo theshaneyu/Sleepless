@@ -955,6 +955,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         return false
     }
 
+    // `open -g sleepless://off` — how scripts and agents flip the main switch off (see
+    // Core/URLCommand.swift). A URL can arrive before applicationDidFinishLaunching when it is
+    // what launched the app; launch then reads the true state itself, so only refresh after.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { URLCommand($0) == .turnOff }) else { return }
+        setDisableSleep(false)
+        userForcedOn = false
+        if statusItem != nil { refresh() }
+    }
+
     // Install the one-time scoped grant via a SINGLE native macOS authorization (the
     // standard Touch ID / password sheet) — no Terminal. Runs the bundled, audited
     // grant.sh as root through osascript's "with administrator privileges"; grant.sh is

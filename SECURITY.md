@@ -70,6 +70,11 @@ case is *"your Mac was kept awake, or allowed to sleep."* It is **not** data exf
 and **not** root code execution — the two pinned arguments to one Apple binary do not
 provide either.
 
+The app also registers the `sleepless://` URL scheme, which any web page or app can open.
+It understands exactly one command, `sleepless://off`, which restores normal sleep. No URL
+can keep the Mac awake (pinned by `Tests/SleeplessCoreTests/URLCommandTests.swift`), so the
+worst a hostile link can do is let your Mac sleep.
+
 If that trade is not acceptable to you, build from source and **don't** run `install.sh`;
 you can toggle `sudo pmset -a disablesleep 1/0` manually instead and skip the grant.
 
