@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # build.sh — compile Sleepless.app from source with the Command Line Tools only.
 #
-# No Xcode project: just `swiftc` + a hand-assembled .app bundle, ad-hoc signed.
+# No Xcode project: just `swiftc` + a hand-assembled .app bundle, signed with your Apple
+# Development certificate when there is one, ad-hoc otherwise.
 # (Package.swift exists only so `swift test` can run the tests; the app never uses it.) Works from any clone (no hardcoded paths or usernames).
 #
 # Usage:
@@ -54,10 +55,10 @@ fi
 [ -f "$ICNS" ] || { echo "error: missing $ICNS (run ./build.sh --regen-icon)" >&2; exit 1; }
 
 # 2. Compile the executable.
-echo "==> Compiling App.swift + Core/"
+echo "==> Compiling App.swift + Core/ + Dashboard/"
 BIN_TMP="$(mktemp -d)"
 swiftc -O -parse-as-library -target "$TARGET" -framework AppKit -framework ServiceManagement \
-  "$REPO/App.swift" "$REPO"/Core/*.swift -o "$BIN_TMP/$APP_NAME"
+  "$REPO/App.swift" "$REPO"/Core/*.swift "$REPO"/Dashboard/*.swift -o "$BIN_TMP/$APP_NAME"
 
 # 3. Assemble the bundle: Contents/{Info.plist, MacOS/<exe>, Resources/<name>.icns}
 echo "==> Assembling bundle"
@@ -73,9 +74,15 @@ cp "$REPO/grant.sh" "$REPO/uninstall.sh" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/Resources/grant.sh" "$CONTENTS/Resources/uninstall.sh"
 rm -rf "$BIN_TMP"
 
-# 4. Ad-hoc sign (no Apple Developer ID needed; trust comes from building it yourself).
-echo "==> Ad-hoc signing"
-codesign --force --deep --sign - "$APP"
+# 4. Sign. macOS ties Location Services access and keychain items to the signature, so an
+# ad-hoc build (a new identity every time) loses both on each rebuild. If an "Apple Development"
+# certificate is in the keychain it is used instead, so those grants survive rebuilds. Override
+# with SIGN_IDENTITY=... (or SIGN_IDENTITY=- to force ad-hoc).
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)}"
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+echo "==> Signing ($([ "$SIGN_IDENTITY" = "-" ] && echo ad-hoc || echo "$SIGN_IDENTITY"))"
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /' || true
 
 echo ""
