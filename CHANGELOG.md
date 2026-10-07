@@ -29,9 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save dialog, usually), the button turns into a force quit. Orca, Tailscale and Sleepless
   itself are listed but can't be quit from the phone. Power is read from macOS's per-process
   energy counters, sampled only while the page is open, so the list costs nothing otherwise.
-- **Set the auto-off timer from the phone.** Tap the 計時關閉 tile to pick no timer, 1 hour or
-  2 hours. It is the same setting as the popover's Off | 1h | 2h control, which follows along;
-  picking a timer again restarts it from now.
+- **Set the auto-off timer from the phone.** The Sleepless card shows whether it is on and the
+  timer's countdown; tap it to pick no timer, 1 hour or 2 hours, or to turn Sleepless off. It
+  is the same setting as the popover's Off | 1h | 2h control, which follows along; picking a
+  timer again restarts it from now.
 - Sleepless asks for Location Services access when the dashboard first starts. macOS only
   reveals Wi-Fi network names to apps that have it.
 - **Several Remote Control servers at once.** The Claude Remote Control card now holds a list

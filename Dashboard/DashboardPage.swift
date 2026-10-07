@@ -106,7 +106,7 @@ let dashboardPage = #"""
   @keyframes pulse { 0% { transform: scale(.6); opacity: .5; } 100% { transform: scale(1.6); opacity: 0; } }
 
   /* Bento */
-  .bento { display: grid; grid-template-columns: 1.08fr 1fr; grid-template-rows: auto auto; gap: 12px; }
+  .bento { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .tile { position: relative; background: var(--tile); border-radius: var(--radius); box-shadow: var(--shadow);
           padding: 16px; overflow: hidden; display: flex; flex-direction: column; min-height: 132px; }
   .tile-label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); }
@@ -117,7 +117,7 @@ let dashboardPage = #"""
   .pressable { transition: transform .18s var(--ease), opacity .18s; }
   .pressable:active { transform: scale(.97); opacity: .85; }
 
-  .battery { grid-row: span 2; align-items: stretch; }
+  .battery { align-items: stretch; }
   .ring-wrap { position: relative; width: 100%; max-width: 168px; aspect-ratio: 1; margin: 12px auto 10px; }
   .ring { width: 100%; height: 100%; transform: rotate(-90deg); }
   .ring circle { fill: none; stroke-width: 11; }
@@ -129,8 +129,8 @@ let dashboardPage = #"""
   .pct small { font-size: 20px; font-weight: 600; margin-left: 1px; color: var(--text-2); }
   .bolt { width: 18px; height: 18px; margin: 6px auto 0; color: var(--green); opacity: 0; transform: scale(.6); transition: .3s var(--ease); }
   .bolt.on { opacity: 1; transform: none; }
-  .battery .foot { margin-top: auto; }
-  .battery .foot .primary { font-size: 17px; font-weight: 650; }
+  .foot { margin-top: auto; }
+  .foot .primary { font-size: 17px; font-weight: 650; }
 
   .awake { background: var(--brand); color: #fff; box-shadow: 0 10px 30px var(--brand-glow); }
   .awake .tile-label, .awake .tile-sub { color: rgba(255, 255, 255, .82); }
@@ -138,8 +138,20 @@ let dashboardPage = #"""
   .awake.off { background: var(--tile); color: var(--text); box-shadow: var(--shadow); }
   .awake.off .tile-label, .awake.off .tile-sub { color: var(--text-2); }
   .awake.off .chev { color: var(--text-3); }
-  .timer .tile-value { font-size: 26px; }
-  .timer.idle .tile-value { font-size: 20px; color: var(--text-2); }
+  .awake .ring .track { stroke: rgba(255, 255, 255, .24); }
+  .awake .ring .fill { stroke: #fff; filter: drop-shadow(0 0 5px rgba(255, 255, 255, .75)); }
+  .awake.off .ring .track { stroke: var(--track); }
+  .awake.off .ring .fill { opacity: 0; }
+  .cup { width: 58px; height: 58px; transition: width .3s var(--ease), height .3s var(--ease); }
+  .timed .cup { width: 34px; height: 34px; margin: 0 auto 4px; }
+  .cup .coffee { fill: currentColor; opacity: .9; transition: opacity .4s; }
+  .cup .steam { animation: steam 2.4s ease-in-out infinite; }
+  .cup .steam + .steam { animation-delay: 1.2s; }
+  @keyframes steam { 0% { opacity: 0; transform: translateY(2px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translateY(-3px); } }
+  .awake.off .cup { color: var(--text-3); }
+  .awake.off .cup .coffee, .awake.off .cup .steam { opacity: 0; animation: none; }
+  .left { font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1; }
+  .left-label { font-size: 12px; font-weight: 600; margin-top: 4px; color: rgba(255, 255, 255, .82); }
 
   /* Wi-Fi */
   .section { margin-top: 28px; }
@@ -279,6 +291,7 @@ let dashboardPage = #"""
   .sheet .hero.warn { background: var(--amber); }
   .sheet .hero.bad { background: var(--red); }
   .sheet .hero.busy { background: var(--accent-soft); color: var(--accent); }
+  .sheet .hero.idle { background: var(--track); color: var(--text-2); }
   .sheet .hero.busy svg { animation: spin 1s linear infinite; }
   .sheet h3 { font-size: 22px; font-weight: 700; text-align: center; letter-spacing: -.01em; }
   .sheet .body { font-size: 15px; color: var(--text-2); text-align: center; margin: 8px 6px 0; }
@@ -302,6 +315,8 @@ let dashboardPage = #"""
   .step.error { color: var(--text); }
   .step.error .mark { background: var(--red); border-color: var(--red); color: #fff; }
   .choices { margin-top: 20px; background: var(--tile-2); border-radius: 16px; overflow: hidden; }
+  .group-label { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 22px 16px 6px; }
+  .group-label + .choices { margin-top: 0; }
   .choice { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 16px; position: relative; }
   .choice + .choice::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: 1px; background: var(--sep); }
   .choice:active { background: var(--track); }
@@ -355,15 +370,24 @@ let dashboardPage = #"""
     <button class="tile awake pressable rise" id="awake" style="animation-delay:.08s">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
       <div class="tile-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13v5a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6V9Z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 2.5c-.6 1 .6 1.8 0 3M12 2.5c-.6 1 .6 1.8 0 3"/></svg>Sleepless</div>
-      <div class="tile-value" id="awake-value">&nbsp;</div>
-      <div class="tile-sub" id="awake-sub">&nbsp;</div>
-    </button>
-
-    <button class="tile timer idle pressable rise" id="timer" style="animation-delay:.12s">
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
-      <div class="tile-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>計時關閉</div>
-      <div class="tile-value rounded" id="timer-value">未設定</div>
-      <div class="tile-sub" id="timer-sub">點一下設定</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 120 120">
+          <circle class="track" cx="60" cy="60" r="52"/>
+          <circle class="fill" id="awake-ring" cx="60" cy="60" r="52" stroke-dasharray="326.73" stroke-dashoffset="0"/>
+        </svg>
+        <div class="ring-center">
+          <svg class="cup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path class="coffee" stroke="none" d="M5.2 10.2h10.6v3.8a4.9 4.9 0 0 1-4.9 4.9h-.8a4.9 4.9 0 0 1-4.9-4.9v-3.8Z"/>
+            <path d="M4 9h13v5a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6V9Z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/>
+            <path class="steam" d="M8 2.5c-.6 1 .6 1.8 0 3"/><path class="steam" d="M12 2.5c-.6 1 .6 1.8 0 3"/>
+          </svg>
+          <div id="awake-timer" hidden><div class="left rounded" id="timer-value"></div><div class="left-label">後關閉</div></div>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="primary" id="awake-state">&nbsp;</div>
+        <div class="tile-sub" id="awake-sub">&nbsp;</div>
+      </div>
     </button>
   </section>
 
@@ -422,7 +446,6 @@ const ICON = {
   spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>',
   power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-  timer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>',
   // Two interlocked rings, like iOS's Personal Hotspot glyph: each ring breaks where the other passes over it.
   hotspot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M14.87 17.06A6 6 0 1 1 15.31 13.58"/><path d="M9.13 6.94A6 6 0 1 1 8.69 10.42"/></svg>',
   window: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/></svg>',
@@ -537,21 +560,25 @@ function renderBattery(b, floor) {
 
 function renderSleepless(s) {
   if (!s) return;
-  const tile = $("awake");
-  tile.classList.toggle("off", !s.on);
-  $("awake-value").textContent = s.on ? "保持喚醒" : "已關閉";
-  $("awake-sub").textContent = s.on ? `電量 ${s.floorPercent}% 時自動關閉` : "闔上螢幕時 Mac 會睡眠";
+  $("awake").classList.toggle("off", !s.on);
+  $("awake-state").textContent = s.on ? "保持喚醒中" : "已關閉";
   renderTimer();
 }
 
+// The ring is the keep-awake time left: full with no timer, draining while one runs, empty when off.
 function renderTimer() {
-  const at = state.status?.sleepless?.autoOffAt ? new Date(state.status.sleepless.autoOffAt) : null;
-  const tile = $("timer");
-  const active = at && at > Date.now();
-  tile.classList.toggle("idle", !active);
-  $("timer-value").textContent = active ? countdown(at - Date.now()) : "未設定";
-  $("timer-sub").textContent = active ? `${clock(at)} 關閉` : "點一下設定";
-  if (state.sheet?.kind === "timer") renderTimerChoices();
+  const s = state.status?.sleepless;
+  if (!s) return;
+  const at = s.autoOffAt ? new Date(s.autoOffAt) : null;
+  const left = s.on && at ? at - Date.now() : 0;
+  const timed = left > 0;
+  $("awake").classList.toggle("timed", timed);
+  $("awake-timer").hidden = !timed;
+  $("timer-value").textContent = timed ? countdown(left) : "";
+  const share = timed ? Math.min(1, left / (Math.max(1, s.autoOffMinutes) * 60000)) : 1;
+  $("awake-ring").style.strokeDashoffset = RING * (1 - share);
+  $("awake-sub").textContent = !s.on ? "只能從 Mac 開啟" : timed ? `${clock(at)} 自動關閉` : `電量 ${s.floorPercent}% 時關閉`;
+  if (state.sheet?.kind === "sleepless") renderTimerChoices();
 }
 
 function renderCurrent(w) {
@@ -917,25 +944,7 @@ function renderSwitchSheet() {
   state.sheet.dismissable = final;
 }
 
-function openSleeplessSheet() {
-  const s = state.status?.sleepless;
-  if (!s) return;
-  const at = s.autoOffAt ? new Date(s.autoOffAt) : null;
-  openSheet("sleepless", () => [
-    el("div", { class: "hero", html: ICON.power }),
-    el("h3", {}, s.on ? "Sleepless 正在保持喚醒" : "Sleepless 已關閉"),
-    el("p", { class: "body" }, s.on ? "闔上螢幕時，Mac 會繼續執行工作。" : "闔上螢幕時 Mac 會正常睡眠。"),
-    el("div", { class: "facts" },
-      el("div", { class: "fact" }, el("span", {}, "低電量自動關閉"), el("span", {}, `${s.floorPercent}%`)),
-      el("div", { class: "fact" }, el("span", {}, "計時關閉"), el("span", {}, at && at > Date.now() ? `${clock(at)}` : "未設定"))),
-    s.on ? el("p", { class: "body", style: "margin-top:16px;font-size:13px" }, "關閉後，Mac 會在螢幕闔上時進入睡眠，這個頁面也會中斷，直到你再次打開 Mac。") : null,
-    el("div", { class: "actions" },
-      s.on ? el("button", { class: "btn destructive pressable", onclick: turnOff }, "關閉 Sleepless") : null,
-      el("button", { class: "btn plain pressable", onclick: closeSheet }, s.on ? "取消" : "完成")),
-  ]);
-}
-
-// ---------- auto-off timer ----------
+// ---------- Sleepless + auto-off timer ----------
 const AUTO_OFF = [[0, "不自動關閉"], [60, "1 小時後"], [120, "2 小時後"]];
 
 function timerChoiceSub(minutes) {
@@ -959,17 +968,24 @@ function renderTimerChoices() {
   }
 }
 
-function openTimerSheet() {
-  if (!state.status?.sleepless?.on) return;
-  openSheet("timer", () => [
-    el("div", { class: "hero", html: ICON.timer }),
-    el("h3", {}, "計時關閉"),
-    el("p", { class: "body" }, "時間到時 Sleepless 會關閉，闔著螢幕的 Mac 會進入睡眠，這個頁面也會中斷。"),
-    el("div", { class: "choices" }, AUTO_OFF.map(([minutes, label]) =>
+function openSleeplessSheet() {
+  const s = state.status?.sleepless;
+  if (!s) return;
+  openSheet("sleepless", () => [
+    el("div", { class: s.on ? "hero" : "hero idle", html: ICON.power }),
+    el("h3", {}, s.on ? "Sleepless 正在保持喚醒" : "Sleepless 已關閉"),
+    el("p", { class: "body" }, s.on
+      ? `闔上螢幕時，Mac 會繼續執行工作。電量剩 ${s.floorPercent}% 時會自動關閉。`
+      : "闔上螢幕時 Mac 會正常睡眠。要在 Mac 上才能重新開啟。"),
+    s.on ? el("div", { class: "group-label" }, "計時關閉") : null,
+    s.on ? el("div", { class: "choices" }, AUTO_OFF.map(([minutes, label]) =>
       el("button", { class: "choice", id: `choice-${minutes}`, onclick: () => setAutoOff(minutes) },
         el("div", { class: "meta" }, el("div", { class: "title" }, label), el("div", { class: "sub" })),
-        el("span", { class: "mark" })))),
-    el("div", { class: "actions" }, el("button", { class: "btn plain pressable", onclick: closeSheet }, "完成")),
+        el("span", { class: "mark" })))) : null,
+    s.on ? el("p", { class: "note" }, "Sleepless 關閉後，闔著螢幕的 Mac 會進入睡眠，這個頁面也會中斷。") : null,
+    el("div", { class: "actions" },
+      s.on ? el("button", { class: "btn destructive pressable", onclick: turnOff }, "關閉 Sleepless") : null,
+      el("button", { class: "btn plain pressable", onclick: closeSheet }, "完成")),
   ]);
   renderTimerChoices();
 }
@@ -1089,7 +1105,6 @@ async function loadNetworks() {
 // ---------- wiring ----------
 $("scan").addEventListener("click", loadNetworks);
 $("awake").addEventListener("click", openSleeplessSheet);
-$("timer").addEventListener("click", openTimerSheet);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") { poll(); loadNetworks(); loadApps(); }
   else { clearTimeout(pollTimer); clearTimeout(appsTimer); }
