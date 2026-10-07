@@ -1,5 +1,5 @@
 // DashboardPage.swift. The single page the phone loads: a bento of battery and Sleepless tiles
-// over a Wi-Fi list. Plain HTML + JS, no build step. It polls /api/status, and while a Wi-Fi
+// over a list of power-hungry apps and a Wi-Fi list. Plain HTML + JS, no build step. It polls /api/status, and while a Wi-Fi
 // switch runs it keeps polling through the moment the link drops, because the Mac keeps its
 // Tailscale address and comes back on its own. The server sends codes; all wording lives here.
 
@@ -189,6 +189,56 @@ let dashboardPage = #"""
   .badge .bars path, .hero .bars path { fill: rgba(255, 255, 255, .35); }
   .badge .bars path.lit, .hero .bars path.lit { fill: #fff; }
 
+  /* Power-hungry apps */
+  .thermal { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 14px;
+             background: var(--tile); box-shadow: var(--shadow); font-size: 13px; font-weight: 600; color: var(--text-2); }
+  .thermal .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  .thermal.warm .dot { background: var(--amber); }
+  .thermal.hot { color: var(--red); }
+  .thermal.hot .dot { background: var(--red); }
+  .draw { background: var(--tile); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
+  .draw-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .draw .kicker { font-size: 13px; font-weight: 600; color: var(--text-2); }
+  .draw-value { font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; margin-top: 2px; }
+  .draw-value small { font-size: 17px; font-weight: 600; color: var(--text-2); margin-left: 3px; }
+  .draw .aside { text-align: right; font-size: 13px; color: var(--text-2); padding-bottom: 4px; }
+  .meter { margin-top: 14px; height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .meter span { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .6s var(--ease); }
+  .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--text-2); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; background: var(--track); }
+  .legend i.apps { background: var(--accent); }
+
+  .app-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; position: relative; }
+  .app-row + .app-row::before, .more::before { content: ""; position: absolute; top: 0; left: 64px; right: 0; height: 1px; background: var(--sep); }
+  .more::before { left: 0; }
+  .app-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; }
+  .app-icon img { width: 36px; height: 36px; }
+  .app-icon.generic { border-radius: 9px; background: var(--tile-2); color: var(--text-3); }
+  .app-icon.generic svg { width: 20px; height: 20px; }
+  .app-row .meta { flex: 1; min-width: 0; }
+  .app-row .name { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .usage { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+  .usage .bar { flex: 1; max-width: 132px; height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .usage .bar span { display: block; height: 100%; border-radius: 3px; background: var(--text-3); transition: width .6s var(--ease); }
+  .usage .bar span.mid { background: var(--amber); }
+  .usage .bar span.high { background: var(--red); }
+  .usage .watts { font-size: 13px; color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .app-row .why { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+  .app-row .why.warn { color: var(--amber); font-weight: 600; }
+  .quit { flex: none; height: 32px; min-width: 66px; padding: 0 14px; border-radius: 16px; font-size: 15px; font-weight: 650;
+          color: var(--red); background: color-mix(in srgb, var(--red) 13%, transparent); display: inline-flex; align-items: center;
+          justify-content: center; gap: 6px; position: relative; overflow: hidden; transition: background .2s, color .2s; }
+  .quit.armed { background: var(--red); color: #fff; }
+  .quit.armed::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: rgba(255, 255, 255, .6);
+                       transform-origin: left; animation: drain 3s linear forwards; animation-delay: var(--elapsed, 0ms); }
+  @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+  .quit:disabled { color: var(--text-2); background: var(--tile-2); }
+  .quit:disabled svg { width: 14px; height: 14px; animation: spin .9s linear infinite; }
+  .lock { flex: none; width: 32px; height: 32px; display: grid; place-items: center; color: var(--text-3); }
+  .lock svg { width: 17px; height: 17px; }
+  .more { width: 100%; padding: 13px 16px; font-size: 15px; font-weight: 600; color: var(--accent); text-align: center; position: relative; }
+  .hint.warn svg { color: var(--amber); }
+
   /* Skeleton */
   .skeleton { color: transparent !important; background: linear-gradient(90deg, var(--track) 0%, var(--tile-2) 50%, var(--track) 100%);
               background-size: 200% 100%; animation: shimmer 1.3s ease-in-out infinite; border-radius: 8px; }
@@ -213,6 +263,7 @@ let dashboardPage = #"""
            font-size: 15px; transform: translateY(140%); transition: transform .45s var(--ease); }
   .toast.show { transform: none; }
   .toast svg { width: 20px; height: 20px; flex: none; color: var(--amber); margin-top: 1px; }
+  .toast.good svg { color: var(--green); }
 
   /* Sheet */
   .scrim { position: fixed; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .35s var(--ease); z-index: 20; }
@@ -308,6 +359,28 @@ let dashboardPage = #"""
 
   <section class="section rise" style="animation-delay:.16s">
     <div class="section-head">
+      <h2>耗電 App</h2>
+      <span class="thermal" id="thermal" hidden><span class="dot"></span><span id="thermal-text"></span></span>
+    </div>
+    <div class="draw" id="draw">
+      <div class="draw-top">
+        <div>
+          <div class="kicker" id="draw-kicker">App 合計耗電</div>
+          <div class="draw-value rounded"><span id="draw-watts" class="skeleton">0.0</span><small>W</small></div>
+        </div>
+        <div class="aside" id="draw-aside">&nbsp;</div>
+      </div>
+      <div id="draw-meter" hidden>
+        <div class="meter"><span id="draw-share"></span></div>
+        <div class="legend"><span><i class="apps"></i><span id="legend-apps"></span></span><span><i></i><span id="legend-rest"></span></span></div>
+      </div>
+    </div>
+    <div class="list" id="apps"></div>
+    <p class="hint" id="apps-hint"></p>
+  </section>
+
+  <section class="section rise" style="animation-delay:.2s">
+    <div class="section-head">
       <h2>Wi-Fi</h2>
       <button class="icon-btn pressable" id="scan" aria-label="重新掃描"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
     </div>
@@ -324,7 +397,7 @@ let dashboardPage = #"""
   </section>
 </div>
 
-<div class="toast" id="toast" role="status"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 5a1.2 1.2 0 0 1 1.2 1.2v4.6a1.2 1.2 0 1 1-2.4 0V8.2A1.2 1.2 0 0 1 12 7Zm0 11a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Z"/></svg><span id="toast-text"></span></div>
+<div class="toast" id="toast" role="status"><span id="toast-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 5a1.2 1.2 0 0 1 1.2 1.2v4.6a1.2 1.2 0 1 1-2.4 0V8.2A1.2 1.2 0 0 1 12 7Zm0 11a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Z"/></svg></span><span id="toast-text"></span></div>
 <div class="scrim" id="scrim"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div id="sheet-body"></div></div>
 
@@ -338,10 +411,13 @@ const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
   spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>',
   power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  window: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/></svg>',
   info: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 4.6a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8ZM13.2 17h-2.4v-6h2.4v6Z"/></svg>',
 };
 
-const state = { status: null, networks: null, lastOk: 0, switching: null, turnedOff: false, sheet: null };
+const state = { status: null, networks: null, lastOk: 0, switching: null, turnedOff: false, sheet: null,
+                apps: null, appsExpanded: false, armed: null, quitting: {} };
 
 // ---------- helpers ----------
 function el(tag, attrs = {}, ...children) {
@@ -395,7 +471,10 @@ function countdown(ms) {
 }
 
 let toastTimer;
-function toast(text) {
+const ALERT_ICON = $("toast-icon").innerHTML;
+function toast(text, { good = false } = {}) {
+  $("toast-icon").innerHTML = good ? ICON.check : ALERT_ICON;
+  $("toast").classList.toggle("good", good);
   $("toast-text").textContent = text;
   $("toast").classList.add("show");
   clearTimeout(toastTimer);
@@ -510,6 +589,165 @@ function render() {
   renderCurrent(st.wifi);
   renderNetworks();
   trackSwitch(st.wifi.lastSwitch);
+}
+
+// ---------- power-hungry apps ----------
+// Apps below this are idle; they stay behind "show all" so the list leads with what matters.
+const BUSY_WATTS = 0.05, TOP_APPS = 6, ARM_MS = 3000;
+const PROTECTION = { agents: "agent 在這裡執行，不能從手機結束", tailscale: "手機靠它連到 Mac", sleepless: "讓 Mac 保持喚醒的就是它" };
+const THERMAL = { nominal: ["", "溫度正常"], fair: ["warm", "有點熱"], serious: ["hot", "偏熱"], critical: ["hot", "過熱"] };
+
+function watts(w) {
+  if (w < 0.1) return "< 0.1 W";
+  return `${w < 10 ? w.toFixed(1) : Math.round(w)} W`;
+}
+
+function renderDraw(report) {
+  const appsTotal = report.apps.reduce((sum, a) => sum + a.watts, 0);
+  const mac = report.macWatts;
+  const value = $("draw-watts");
+  value.classList.remove("skeleton");
+  value.textContent = (mac ?? appsTotal).toFixed(1);
+  $("draw-kicker").textContent = mac != null ? "Mac 目前耗電" : "App 合計耗電";
+  $("draw-aside").textContent = mac != null ? `過去 ${Math.round(report.windowSeconds)} 秒平均` : "已接上電源";
+  $("draw-meter").hidden = mac == null;
+  if (mac != null) {
+    const apps = Math.min(appsTotal, mac);
+    $("draw-share").style.width = `${mac > 0 ? (apps / mac) * 100 : 0}%`;
+    $("legend-apps").textContent = `App ${watts(apps)}`;
+    $("legend-rest").textContent = `系統與其他 ${watts(mac - apps)}`;
+  }
+  const [kind, word] = THERMAL[report.thermal] ?? THERMAL.nominal;
+  $("thermal").hidden = false;
+  $("thermal").className = `thermal ${kind}`;
+  $("thermal-text").textContent = word;
+}
+
+function appRow(app, maxWatts) {
+  const phase = app.quit;
+  const level = app.watts >= 2 ? "high" : app.watts >= 0.5 ? "mid" : "";
+  const icon = el("div", { class: "app-icon" },
+    el("img", { src: `/api/apps/icon/${encodeURIComponent(app.id)}`, alt: "", loading: "lazy",
+                onerror: (e) => { const box = e.target.parentNode; box.className = "app-icon generic"; box.innerHTML = ICON.window; } }));
+  const why = app.protection ? el("div", { class: "why" }, PROTECTION[app.protection])
+    : phase === "notResponding" ? el("div", { class: "why warn" }, "沒有回應，可能正在等待存檔")
+    : null;
+  const meta = el("div", { class: "meta" },
+    el("div", { class: "name" }, app.name),
+    el("div", { class: "usage" },
+      el("div", { class: "bar" }, el("span", { class: level, style: `width:${Math.max(3, (app.watts / maxWatts) * 100)}%` })),
+      el("span", { class: "watts" }, watts(app.watts))),
+    why);
+  return el("div", { class: "app-row" }, icon, meta, app.protection ? el("span", { class: "lock", html: ICON.lock }) : quitButton(app));
+}
+
+// Two taps, no sheet: the first arms the button for a few seconds, the second quits. Quick when
+// clearing several apps in a row, and a bump on the train can't quit anything by itself.
+function quitButton(app) {
+  if (app.quit === "quitting") return el("button", { class: "quit", disabled: "" }, el("span", { html: ICON.spinner }), "結束中");
+  const force = app.quit === "notResponding";
+  const key = `${app.id}|${force}`;
+  const armed = state.armed?.key === key;
+  const label = force ? (armed ? "確定強制結束" : "強制結束") : (armed ? "確定結束" : "結束");
+  const btn = el("button", { class: `quit pressable${armed ? " armed" : ""}`, onclick: () => tapQuit(app, force, key) }, label);
+  if (armed) btn.style.setProperty("--elapsed", `${-(Date.now() - state.armed.at)}ms`);
+  return btn;
+}
+
+function tapQuit(app, force, key) {
+  if (state.armed?.key !== key) {
+    clearTimeout(state.armed?.timer);
+    state.armed = { key, at: Date.now(), timer: setTimeout(() => { state.armed = null; renderApps(); }, ARM_MS) };
+    return renderApps();
+  }
+  if (Date.now() - state.armed.at < 350) return;   // a double tap is not a confirmation
+  clearTimeout(state.armed.timer);
+  state.armed = null;
+  quitApp(app, force);
+}
+
+const QUIT_REFUSAL = {
+  protected: (n) => `${quote(n)}受到保護，不能從手機結束。`,
+  notRunning: (n) => `${quote(n)}已經結束了。`,
+};
+
+async function quitApp(app, force) {
+  state.quitting[app.id] = { name: app.name, watts: app.watts };
+  app.quit = "quitting";
+  renderApps();
+  try {
+    const res = await api("/api/apps/quit", { method: "POST", body: { id: app.id, force } });
+    if (!res.ok) {
+      delete state.quitting[app.id];
+      const f = QUIT_REFUSAL[res.body?.code];
+      toast(f ? f(app.name) : `無法結束${quote(app.name)}（${res.status}）`);
+    }
+  } catch {
+    delete state.quitting[app.id];
+    toast("無法連線到 Mac。");
+  }
+  scheduleApps(1500);
+}
+
+function renderApps() {
+  const list = $("apps");
+  const report = state.apps;
+  if (!report) {
+    list.replaceChildren(...[0, 1, 2].map(() => el("div", { class: "app-row" },
+      el("div", { class: "app-icon generic" }), el("div", { class: "meta" }, el("span", { class: "name skeleton" }, "Application name")))));
+    return;
+  }
+  renderDraw(report);
+  const busy = report.apps.filter((a) => a.watts >= BUSY_WATTS || a.quit);
+  const shown = state.appsExpanded ? report.apps : busy.slice(0, TOP_APPS);
+  const maxWatts = Math.max(0.5, ...report.apps.map((a) => a.watts));
+  const rows = shown.map((a) => appRow(a, maxWatts));
+  if (!rows.length) rows.push(el("div", { class: "empty" }, "目前沒有明顯耗電的 App"));
+  const hidden = report.apps.length - shown.length;
+  if (state.appsExpanded || hidden > 0) {
+    rows.push(el("button", { class: "more", onclick: () => { state.appsExpanded = !state.appsExpanded; renderApps(); } },
+      state.appsExpanded ? "只顯示耗電的 App" : `顯示全部 ${report.apps.length} 個 App`));
+  }
+  list.replaceChildren(...rows);
+
+  const hint = $("apps-hint");
+  hint.replaceChildren();
+  hint.className = "hint";
+  if (report.thermal === "serious" || report.thermal === "critical") {
+    hint.classList.add("warn");
+    hint.append(el("span", { html: ICON.info }), "Mac 正在變熱。結束耗電的 App，或讓包包裡的 Mac 有點空間散熱。");
+  }
+}
+
+// An app that disappears while it was being quit has really quit; say what that saved.
+function settleQuits(report) {
+  const running = new Set(report.apps.map((a) => a.id));
+  for (const [id, q] of Object.entries(state.quitting)) {
+    if (running.has(id)) continue;
+    delete state.quitting[id];
+    toast(`已結束${quote(q.name)}${q.watts >= 0.1 ? `，省下約 ${watts(q.watts)}` : ""}。`, { good: true });
+  }
+}
+
+let appsTimer = null;
+async function loadApps() {
+  clearTimeout(appsTimer);
+  try {
+    const res = await api("/api/apps", { timeout: 8000 });
+    if (res.ok) {
+      settleQuits(res.body);
+      state.apps = res.body;
+      renderApps();
+    }
+  } catch { /* the status poll already shows the link state */ }
+  scheduleApps();
+}
+
+function scheduleApps(delay) {
+  clearTimeout(appsTimer);
+  if (document.visibilityState !== "visible") return;
+  const quitting = state.apps?.apps.some((a) => a.quit === "quitting");
+  appsTimer = setTimeout(loadApps, delay ?? (quitting ? 2000 : 10000));
 }
 
 // ---------- sheet ----------
@@ -766,7 +1004,7 @@ async function loadNetworks() {
     if (pulled < 60) { ptr.style.opacity = 0; ptr.style.transform = ""; return; }
     ptr.classList.add("loading");
     ptr.style.transform = "translateY(14px)";
-    await Promise.all([poll(), loadNetworks()]);
+    await Promise.all([poll(), loadNetworks(), loadApps()]);
     ptr.classList.remove("loading");
     ptr.style.opacity = 0;
     ptr.style.transform = "";
@@ -777,7 +1015,8 @@ async function loadNetworks() {
 $("scan").addEventListener("click", loadNetworks);
 $("awake").addEventListener("click", openSleeplessSheet);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") { poll(); loadNetworks(); } else clearTimeout(pollTimer);
+  if (document.visibilityState === "visible") { poll(); loadNetworks(); loadApps(); }
+  else { clearTimeout(pollTimer); clearTimeout(appsTimer); }
 });
 setInterval(() => {
   renderLive();
@@ -791,6 +1030,8 @@ setInterval(() => {
 
 poll();
 loadNetworks();
+renderApps();
+loadApps();
 </script>
 </body>
 </html>

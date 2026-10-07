@@ -35,8 +35,9 @@
 //      closed. They are child processes, not daemons: they start and die with the keep-awake
 //      switch, and the OS reaps them on sleep. The rules live in Core/RemoteControlConfig.swift.
 //   5. Phone dashboard — OFF by default. While the Mac is kept awake, a loopback-only web page
-//      shows battery, Wi-Fi and Sleepless state to your phone through `tailscale serve`, and can
-//      move the Mac to another Wi-Fi network you saved a password for (Dashboard/).
+//      shows battery, Wi-Fi and Sleepless state to your phone through `tailscale serve`, can
+//      move the Mac to another Wi-Fi network you saved a password for, and can quit apps that
+//      draw too much power (Dashboard/).
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \

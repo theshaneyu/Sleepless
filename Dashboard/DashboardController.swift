@@ -69,6 +69,7 @@ enum DashboardProblem: Error, Equatable {
 @MainActor
 final class DashboardController {
     let wifi = WifiController()
+    private let energy = AppEnergyMonitor()
     weak var host: DashboardHost?
     var onChange: (() -> Void)?
 
@@ -164,10 +165,26 @@ final class DashboardController {
                 case .failure(let refusal): respond(json(409, ["code": refusal.code, "ssid": refusal.ssid]))
                 }
             }
+        case ("GET", "/api/apps"):
+            energy.report { respond(json(200, $0)) }
+        case ("GET", let path) where path.hasPrefix(appIconPathPrefix):
+            let id = String(path.dropFirst(appIconPathPrefix.count)).removingPercentEncoding ?? ""
+            guard let png = energy.icon(id: id) else { return respond(.text(404, "Not running")) }
+            respond(HTTPResponse(status: 200, contentType: "image/png", body: png, cacheControl: "private, max-age=86400"))
+        case ("POST", "/api/apps/quit"):
+            struct Quit: Decodable { let id: String; let force: Bool? }
+            guard let body = try? JSONDecoder().decode(Quit.self, from: request.body) else {
+                return respond(.text(400, "Expected {\"id\": \"...\"}."))
+            }
+            if let refusal = energy.quit(id: body.id, force: body.force ?? false) {
+                return respond(json(409, ["code": refusal.rawValue]))
+            }
+            respond(json(202, ["ok": true]))
         case ("POST", "/api/sleepless/off"):
             respond(json(202, ["ok": true]))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.host?.dashboardTurnOff() }
-        case (_, "/"), (_, "/api/status"), (_, "/api/wifi/networks"), (_, "/api/wifi/switch"), (_, "/api/sleepless/off"):
+        case (_, "/"), (_, "/api/status"), (_, "/api/wifi/networks"), (_, "/api/wifi/switch"), (_, "/api/sleepless/off"),
+             (_, "/api/apps"), (_, "/api/apps/quit"):
             respond(.text(405, "Method not allowed"))
         default:
             respond(.text(404, "Not found"))
@@ -195,17 +212,10 @@ final class DashboardController {
                            locationAuthorized: wifi.locationAuthorized, lastSwitch: wifi.switchState))
     }
 
-    private lazy var appIconPNG: Data = {
-        let size = NSSize(width: 180, height: 180)
-        let image = NSImage(size: size, flipped: false) { rect in
-            NSApp.applicationIconImage.draw(in: rect)
-            return true
-        }
-        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]) else { return Data() }
-        return png
-    }()
+    private lazy var appIconPNG = pngData(of: NSApp.applicationIconImage, side: 180)
 }
+
+private let appIconPathPrefix = "/api/apps/icon/"
 
 private func json<T: Encodable>(_ status: Int, _ value: T) -> HTTPResponse {
     let encoder = JSONEncoder()

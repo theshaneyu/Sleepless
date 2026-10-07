@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch needs a way back: the network the Mac is on must be saved too. If the new network
   doesn't reach the internet within 45 seconds (a wrong password or a captive portal), the Mac
   rejoins the previous one, because the phone usually reached it through that network.
+- **Power-hungry apps on the phone.** The dashboard ranks open apps by how much power they
+  draw, with each app's helpers and system services (a container VM, say) counted toward it,
+  and shows the whole Mac's draw while it runs on battery, plus the thermal state. Tap
+  **結束** twice to quit an app the way ⌘Q does; if it is still running after 10 seconds (a
+  save dialog, usually), the button turns into a force quit. Orca, Tailscale and Sleepless
+  itself are listed but can't be quit from the phone. Power is read from macOS's per-process
+  energy counters, sampled only while the page is open, so the list costs nothing otherwise.
 - Sleepless asks for Location Services access when the dashboard first starts. macOS only
   reveals Wi-Fi network names to apps that have it.
 - **Several Remote Control servers at once.** The Claude Remote Control card now holds a list

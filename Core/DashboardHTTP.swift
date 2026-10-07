@@ -53,6 +53,7 @@ struct HTTPResponse: Sendable {
     let contentType: String
     let body: Data
     var extraHeaders: [(String, String)] = []
+    var cacheControl = "no-store"
 
     static func text(_ status: Int, _ message: String) -> HTTPResponse {
         HTTPResponse(status: status, contentType: "text/plain; charset=utf-8", body: Data(message.utf8))
@@ -62,7 +63,7 @@ struct HTTPResponse: Sendable {
         var head = "HTTP/1.1 \(status) \(HTTPResponse.reason(status))\r\n"
         head += "Content-Type: \(contentType)\r\n"
         head += "Content-Length: \(body.count)\r\n"
-        head += "Cache-Control: no-store\r\n"
+        head += "Cache-Control: \(cacheControl)\r\n"
         head += "Connection: close\r\n"
         for (name, value) in extraHeaders { head += "\(name): \(value)\r\n" }
         head += "\r\n"

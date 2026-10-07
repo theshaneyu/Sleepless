@@ -1,5 +1,6 @@
 // BatteryReader.swift. The internal battery as IOKit reports it, for the phone dashboard.
 import Foundation
+import IOKit
 import IOKit.ps
 
 struct BatterySnapshot: Encodable {
@@ -24,4 +25,19 @@ func readBattery() -> BatterySnapshot? {
                                minutesRemaining: minutes.flatMap { $0 > 0 ? $0 : nil })
     }
     return nil
+}
+
+// The whole Mac's draw from the battery, in watts. Nil on power, where the battery isn't the
+// source. IOPS doesn't report voltage, so this reads the battery's own registry entry.
+func readDischargeWatts() -> Double? {
+    let battery = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+    guard battery != 0 else { return nil }
+    defer { IOObjectRelease(battery) }
+    func number(_ key: String) -> NSNumber? {
+        IORegistryEntryCreateCFProperty(battery, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber
+    }
+    guard number("ExternalConnected")?.boolValue == false,
+          let milliamps = number("InstantAmperage")?.int64Value ?? number("Amperage")?.int64Value, milliamps < 0,
+          let millivolts = number("Voltage")?.int64Value, millivolts > 0 else { return nil }
+    return Double(-milliamps) * Double(millivolts) / 1_000_000
 }
