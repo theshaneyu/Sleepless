@@ -138,8 +138,6 @@ let dashboardPage = #"""
   .awake.off { background: var(--tile); color: var(--text); box-shadow: var(--shadow); }
   .awake.off .tile-label, .awake.off .tile-sub { color: var(--text-2); }
   .awake.off .chev { color: var(--text-3); }
-  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 3px 7px;
-          border-radius: 8px; background: rgba(255, 255, 255, .2); margin-top: 6px; width: fit-content; }
   .timer .tile-value { font-size: 26px; }
   .timer.idle .tile-value { font-size: 20px; color: var(--text-2); }
 
@@ -359,7 +357,6 @@ let dashboardPage = #"""
       <div class="tile-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13v5a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6V9Z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 2.5c-.6 1 .6 1.8 0 3M12 2.5c-.6 1 .6 1.8 0 3"/></svg>Sleepless</div>
       <div class="tile-value" id="awake-value">&nbsp;</div>
       <div class="tile-sub" id="awake-sub">&nbsp;</div>
-      <div class="chip" id="lpm" hidden><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>低耗電模式</div>
     </button>
 
     <button class="tile timer idle pressable rise" id="timer" style="animation-delay:.12s">
@@ -544,7 +541,6 @@ function renderSleepless(s) {
   tile.classList.toggle("off", !s.on);
   $("awake-value").textContent = s.on ? "保持喚醒" : "已關閉";
   $("awake-sub").textContent = s.on ? `電量 ${s.floorPercent}% 時自動關閉` : "闔上螢幕時 Mac 會睡眠";
-  $("lpm").hidden = !s.lowPowerMode;
   renderTimer();
 }
 
@@ -931,8 +927,7 @@ function openSleeplessSheet() {
     el("p", { class: "body" }, s.on ? "闔上螢幕時，Mac 會繼續執行工作。" : "闔上螢幕時 Mac 會正常睡眠。"),
     el("div", { class: "facts" },
       el("div", { class: "fact" }, el("span", {}, "低電量自動關閉"), el("span", {}, `${s.floorPercent}%`)),
-      el("div", { class: "fact" }, el("span", {}, "計時關閉"), el("span", {}, at && at > Date.now() ? `${clock(at)}` : "未設定")),
-      el("div", { class: "fact" }, el("span", {}, "低耗電模式"), el("span", {}, s.lowPowerMode ? "開啟" : "關閉"))),
+      el("div", { class: "fact" }, el("span", {}, "計時關閉"), el("span", {}, at && at > Date.now() ? `${clock(at)}` : "未設定"))),
     s.on ? el("p", { class: "body", style: "margin-top:16px;font-size:13px" }, "關閉後，Mac 會在螢幕闔上時進入睡眠，這個頁面也會中斷，直到你再次打開 Mac。") : null,
     el("div", { class: "actions" },
       s.on ? el("button", { class: "btn destructive pressable", onclick: turnOff }, "關閉 Sleepless") : null,

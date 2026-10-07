@@ -386,10 +386,6 @@
         <h3>Battery-floor cutoff</h3><p>Pick a floor from 5 to 50% (default 15%). On battery, it turns itself off before you run flat.</p>
       </div>
       <div class="spec glass">
-        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 4 13c0-5 5-9 16-9 0 9-4 16-9 16Z"/><path d="M4 20c4-5 7-7 11-8"/></svg></div>
-        <h3>Low Power Mode aware</h3><p>On battery, if Low Power Mode is on, Sleepless steps aside and lets the Mac sleep.</p>
-      </div>
-      <div class="spec glass">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m4 3 16 16"/></svg></div>
         <h3>No display, no dongle</h3><p>Just the lid closed, on battery. No external monitor, no dummy HDMI plug.</p>
       </div>
@@ -406,7 +402,7 @@
   <div class="wrap reveal">
     <p class="eyebrow">How it works</p>
     <h2 class="sec">One setting, flipped safely</h2>
-    <p class="lead">Sleepless toggles <code>pmset disablesleep</code>, which flips the kernel's <code>SleepDisabled</code> flag, then reverts it at your battery floor, in Low Power Mode, or when the timer ends. A reboot also resets it. Because a GUI app can't type a password, the installer adds a tightly scoped sudoers rule that permits exactly two commands and nothing else.</p>
+    <p class="lead">Sleepless toggles <code>pmset disablesleep</code>, which flips the kernel's <code>SleepDisabled</code> flag, then reverts it at your battery floor or when the timer ends. A reboot also resets it. Because a GUI app can't type a password, the installer adds a tightly scoped sudoers rule that permits exactly two commands and nothing else.</p>
     <div class="codeblock glass">
       <div class="fname">/etc/sudoers.d/sleepless</div>
       <pre>&lt;you&gt; ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1</pre>
@@ -449,7 +445,7 @@
     <details><summary>How do I keep my MacBook awake with the lid closed without a monitor?</summary><p>Install Sleepless, click the coffee cup in the menu bar, flip the switch on, and close the lid (the laptop screen, also called the flap). It keeps the Mac awake on battery with no external display, using <code>pmset disablesleep</code>. No dummy HDMI plug or clamshell adapter is needed.</p></details>
     <details><summary>Why does my MacBook sleep when I close the lid even with Amphetamine or KeepingYouAwake?</summary><p>Those tools are built on macOS power assertions, which stop the idle timer but cannot override the hardware lid-close trigger. KeepingYouAwake wraps <code>caffeinate</code>, which its maintainer confirms cannot do lid-close. <code>pmset disablesleep</code>, which Sleepless uses, is a lower-level setting that can.</p></details>
     <details><summary>Does pmset disablesleep still work on Apple Silicon (M1/M2/M3)?</summary><p>Yes. <code>pmset -a disablesleep 1</code> sets the kernel's <code>SleepDisabled</code> flag on Apple Silicon, confirmed firsthand on macOS 26.3, which keeps a MacBook awake with the lid closed on battery. Apple does not officially document the setting, so verify it with <code>pmset -g | grep SleepDisabled</code>. Most claims that it stopped working describe <code>caffeinate</code>, a different mechanism.</p></details>
-    <details><summary>Is it safe to run a MacBook with the lid closed? Will it overheat or drain the battery?</summary><p>It is safe for light, unattended work like downloads, syncs, or a hotspot. Heavy sustained load with the lid fully closed reduces airflow, so use judgement there. Sleepless turns itself off at the floor you set and in Low Power Mode, and the auto-off timer caps how long it stays on.</p></details>
+    <details><summary>Is it safe to run a MacBook with the lid closed? Will it overheat or drain the battery?</summary><p>It is safe for light, unattended work like downloads, syncs, or a hotspot. Heavy sustained load with the lid fully closed reduces airflow, so use judgement there. Sleepless turns itself off at the floor you set, and the auto-off timer caps how long it stays on.</p></details>
     <details><summary>Does Sleepless require sudo, a kernel extension, or a background daemon?</summary><p>It needs one tightly scoped <code>sudo</code> grant (two exact <code>pmset</code> commands, nothing else) so a GUI app can flip the setting without a password prompt. There is no kernel extension and no background daemon. The whole app is a single AppKit file.</p></details>
     <details><summary>Can I run AI agents or long jobs overnight with the lid closed?</summary><p>Yes. Switch Sleepless on, set a battery floor, close the lid, and an agent run, build, render, or training job keeps going. Plug in for an all-nighter, or stay on battery with a floor and timer so it stops itself before the battery runs low.</p></details>
   </div>

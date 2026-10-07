@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failure that retrying can't fix now stops only that repo's server and turns its light
   red. The switch and the other servers stay on; turning the switch off and on retries it.
   Previously any such failure turned the whole switch off.
+
+### Removed
+- **Low Power Mode auto-off.** Sleepless no longer turns itself off when Low Power Mode is on.
+  Many Macs are set to run in Low Power Mode whenever they are on battery, which is exactly when
+  Sleepless is needed, so the check only got in the way. The battery floor and the auto-off
+  timer still stop it. The phone dashboard no longer shows Low Power Mode either.
 - Each server writes its own log, `~/Library/Logs/Sleepless/remote-control-<repo>.log`.
 - The repository chosen in 1.3.x becomes the first entry in the list. A fresh install starts
   with an empty list instead of a hardcoded default repo.
@@ -107,8 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap bounds anything pathological.
 
 Remote Control adds no daemon: it is a child process that lives and dies with the
-keep-awake switch, so the auto-off timer, the battery floor, Low Power Mode, quitting the
-app, and the Mac going to sleep all tear it down without any extra machinery.
+keep-awake switch, so the auto-off timer, the battery floor, quitting the app, and the Mac going to sleep all tear it down without any extra machinery.
 
 ## [1.2.7] - 2026-06-03
 

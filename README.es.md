@@ -64,7 +64,6 @@ Luego haz clic en la taza de la barra de menús, activa el interruptor y cierra 
 | ☕ | **Un solo interruptor** | Haz clic en la taza de la barra de menús y activa el conmutador. |
 | ⏲️ | **Temporizador de apagado** | 1 h o 2 h con cuenta atrás en vivo, y luego se apaga. |
 | 🔋 | **Nivel mínimo de batería** | Apagado automático al 5–50 % con batería (15 % por defecto). |
-| 🪫 | **Low Power Mode** | Se hace a un lado cuando LPM está activado, con batería. |
 | 🖥️ | **Sin adaptador** | Tapa cerrada, con batería. Sin monitor, sin enchufe HDMI. |
 | 🚀 | **Iniciar al iniciar sesión** | Opcional, desactivado por defecto, siempre arranca apagado. |
 | 🪶 | **Diminuto y nativo** | Un archivo de AppKit. Sin icono en el Dock, daemon ni kext. |
@@ -96,7 +95,7 @@ Luego haz clic en la taza de la barra de menús, activa el interruptor y cierra 
 
 ## Cómo funciona
 
-Sleepless activa `pmset disablesleep` (el indicador `SleepDisabled` del kernel), vuelve a leerlo para que la barra de menús nunca mienta, y lo revierte en tu nivel mínimo de batería, en Low Power Mode, cuando el temporizador termina o al reiniciar. Una app gráfica no puede escribir una contraseña, así que el instalador añade una regla de sudoers de alcance reducido para **exactamente dos comandos**:
+Sleepless activa `pmset disablesleep` (el indicador `SleepDisabled` del kernel), vuelve a leerlo para que la barra de menús nunca mienta, y lo revierte en tu nivel mínimo de batería, cuando el temporizador termina o al reiniciar. Una app gráfica no puede escribir una contraseña, así que el instalador añade una regla de sudoers de alcance reducido para **exactamente dos comandos**:
 
 ```
 <you> ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
@@ -132,7 +131,7 @@ Esas usan aserciones de energía de macOS, que detienen el temporizador de inact
 <details>
 <summary><b>¿es seguro? ¿se sobrecalentará o agotará la batería?</b></summary>
 
-Es seguro para trabajo ligero y sin supervisión (descargas, sincronizaciones, un punto de acceso). Una carga sostenida y pesada con la tapa totalmente cerrada reduce el flujo de aire, así que usa el sentido común. El nivel mínimo de batería, el apagado automático en Low Power Mode y el temporizador lo detienen todos antes de que agote el Mac.
+Es seguro para trabajo ligero y sin supervisión (descargas, sincronizaciones, un punto de acceso). Una carga sostenida y pesada con la tapa totalmente cerrada reduce el flujo de aire, así que usa el sentido común. El nivel mínimo de batería y el temporizador lo detienen antes de que agote el Mac.
 </details>
 
 <details>

@@ -64,7 +64,6 @@ Then click the cup in the menu bar, flip the switch, and close the lid.
 | ☕ | **One switch** | Click the menu-bar cup, flip the toggle. |
 | ⏲️ | **Auto-off timer** | 1h or 2h with a live countdown, then off. |
 | 🔋 | **Battery floor** | Auto-off at 5–50% on battery (default 15%). |
-| 🪫 | **Low Power Mode** | Steps aside when LPM is on, on battery. |
 | 🖥️ | **No dongle** | Lid closed, on battery. No monitor, no HDMI plug. |
 | 🚀 | **Launch at login** | Optional, off by default, always starts idle. |
 | 🪶 | **Tiny + native** | One AppKit file. No Dock icon, daemon, or kext. |
@@ -96,7 +95,7 @@ Then click the cup in the menu bar, flip the switch, and close the lid.
 
 ## How it works
 
-Sleepless toggles `pmset disablesleep` (the kernel's `SleepDisabled` flag), reads it back so the menu bar never lies, and reverts it at your battery floor, in Low Power Mode, when the timer ends, or on reboot. A GUI app can't type a password, so the installer adds a scoped sudoers rule for **exactly two commands**:
+Sleepless toggles `pmset disablesleep` (the kernel's `SleepDisabled` flag), reads it back so the menu bar never lies, and reverts it at your battery floor, when the timer ends, or on reboot. A GUI app can't type a password, so the installer adds a scoped sudoers rule for **exactly two commands**:
 
 ```
 <you> ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
@@ -132,7 +131,7 @@ Those use macOS power assertions, which stop the idle timer but can't override t
 <details>
 <summary><b>Is it safe? Will it overheat or drain the battery?</b></summary>
 
-It is safe for light unattended work (downloads, syncs, a hotspot). Heavy sustained load with the lid fully shut reduces airflow, so use judgement. The battery floor, Low Power Mode auto-off, and the timer all stop it before it drains the Mac.
+It is safe for light unattended work (downloads, syncs, a hotspot). Heavy sustained load with the lid fully shut reduces airflow, so use judgement. The battery floor and the timer both stop it before it drains the Mac.
 </details>
 
 <details>

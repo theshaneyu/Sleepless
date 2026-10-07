@@ -66,7 +66,6 @@ brew install --cask aboudjem/tap/sleepless
 | ☕ | **一个开关** | 点击菜单栏里的咖啡杯，拨动开关。 |
 | ⏲️ | **自动关闭定时器** | 1 小时或 2 小时，带实时倒计时，到点关闭。 |
 | 🔋 | **电量下限** | 电池供电时在 5–50% 自动关闭（默认 15%）。 |
-| 🪫 | **Low Power Mode** | 电池供电下若 LPM 开启，自动让位。 |
 | 🖥️ | **无需转接** | 合盖、电池供电即可。不用显示器，不用 HDMI 插头。 |
 | 🚀 | **登录时启动** | 可选，默认关闭，始终以关闭状态启动。 |
 | 🪶 | **小巧且原生** | 一个 AppKit 文件。无 Dock 图标、守护进程或 kext。 |
@@ -98,7 +97,7 @@ brew install --cask aboudjem/tap/sleepless
 
 ## 工作原理
 
-Sleepless 切换 `pmset disablesleep`（内核的 `SleepDisabled` 标志），把它读回来让菜单栏绝不撒谎，并在到达你的电量下限、进入 Low Power Mode、定时器结束或重启时把它还原。GUI 应用没法输入密码，所以安装程序会加一条范围严格限定的 sudoers 规则，**只允许两条命令**：
+Sleepless 切换 `pmset disablesleep`（内核的 `SleepDisabled` 标志），把它读回来让菜单栏绝不撒谎，并在到达你的电量下限、定时器结束或重启时把它还原。GUI 应用没法输入密码，所以安装程序会加一条范围严格限定的 sudoers 规则，**只允许两条命令**：
 
 ```
 <you> ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
@@ -134,7 +133,7 @@ gh attestation verify Sleepless-*.zip -R Aboudjem/Sleepless
 <details>
 <summary><b>合盖运行安全吗？会过热或耗光电池吗？</b></summary>
 
-对于下载、同步、共享热点这类轻量、无人看管的任务来说是安全的。完全合盖下长时间高负载会限制散热气流，所以请自己掂量。电量下限、Low Power Mode 自动关闭和定时器都会在 Mac 电量见底之前把它停下来。
+对于下载、同步、共享热点这类轻量、无人看管的任务来说是安全的。完全合盖下长时间高负载会限制散热气流，所以请自己掂量。电量下限和定时器都会在 Mac 电量见底之前把它停下来。
 </details>
 
 <details>

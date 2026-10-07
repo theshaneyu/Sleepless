@@ -20,21 +20,19 @@
 // FULL cup means it is being kept awake (caffeinated), and a full cup with a small
 // dot means it is awake on battery with the auto-off safety net live.
 //
-// Five small, fail-safe features layer on top, none of which adds a daemon or
+// Four small, fail-safe features layer on top, none of which adds a daemon or
 // persists OS state (so "reboot resets it" still holds):
 //   1. Auto-off timer (1h / 2h) — a one-shot in-memory Timer that flips sleep back
 //      on when it fires. Dies on quit; nothing survives a reboot.
 //   2. Launch at login (SMAppService.mainApp) — OFF by default. The app always
 //      launches reading the TRUE system state, so a login launch can never
 //      re-enable disablesleep on its own.
-//   3. Low-Power-Mode auto-off — on battery, if Low Power Mode is on, Sleepless
-//      turns itself off. Same shape as the battery floor, evaluated on the same tick.
-//   4. Claude Remote Control — ON by default. While the Mac is kept awake, a supervised
+//   3. Claude Remote Control — ON by default. While the Mac is kept awake, a supervised
 //      `claude remote-control` child process runs in each repo you add under ~/Projects (up
 //      to five), so new Claude Code sessions can be started from the phone with the lid
 //      closed. They are child processes, not daemons: they start and die with the keep-awake
 //      switch, and the OS reaps them on sleep. The rules live in Core/RemoteControlConfig.swift.
-//   5. Phone dashboard — OFF by default. While the Mac is kept awake, a loopback-only web page
+//   4. Phone dashboard — OFF by default. While the Mac is kept awake, a loopback-only web page
 //      shows battery, Wi-Fi and Sleepless state to your phone through `tailscale serve`, can
 //      move the Mac to another Wi-Fi network you saved a password for, and can quit apps that
 //      draw too much power (Dashboard/).
@@ -56,7 +54,7 @@ private let floorDefault = 15
 private let floorMin = 5
 private let floorMax = 50
 
-// Claude Remote Control (Feature 4): optional companion processes running
+// Claude Remote Control (Feature 3): optional companion processes running
 // `claude remote-control` inside chosen repos, so a lid-closed Mac can still accept new
 // Claude Code sessions started from the phone. Their lifecycle follows the keep-awake switch —
 // the servers exist only while the Mac is kept awake, and macOS reaping them on sleep is
@@ -590,7 +588,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var clickMonitor: Any?
     private var batteryFloorPercent = floorDefault
     private var isOn = false
-    private var userForcedOn = false   // user deliberately turned it on; honor over the Low Power Mode auto-off (the hard battery floor still wins)
 
     // Auto-off timer (in-memory; dies on quit, never survives a reboot)
     private var autoOffMinutes = 0           // one of autoOffChoices; 0 = none (stay on until off)
@@ -598,7 +595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var countdownTicker: Timer?      // 1 Hz label refresh, only while the popover is open
     private var timerEndDate: Date?
 
-    // Claude Remote Control (Feature 4)
+    // Claude Remote Control (Feature 3)
     private var rcSwitch: NSSwitch!
     private var rcCard: CardView!
     private var rcRows: [RemoteControlRow] = []
@@ -611,7 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var rcConfig = RemoteControlConfig(enabled: true, repos: [])
     private var rcServers: [String: RemoteControlServer] = [:]
 
-    // Phone dashboard (Feature 5)
+    // Phone dashboard (Feature 4)
     private let dashboard = DashboardController()
     private var dashboardEnabled = false
     private var dashboardSwitch: NSSwitch!
@@ -987,7 +984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     // must act (the passwordless grant is missing and setup did not complete) so the caller can
     // reflect OFF. The decision to prompt is made on the REAL sudo result (see setDisableSleep),
     // never by re-reading SleepDisabled: a successful sudo means the command ran, even if a
-    // safety net (Low Power Mode / battery floor) legitimately turns sleep back on afterwards —
+    // safety net (the battery floor) legitimately turns sleep back on afterwards —
     // which must NOT be mistaken for "permission missing" and trigger a password prompt. This
     // unobservable, state-proxy decision is what made earlier releases re-prompt spuriously.
     @discardableResult
@@ -1002,9 +999,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
                 return true
             }
         }
-        // A deliberate, successful turn-on wins over the Low Power Mode auto-off (hard floor still wins).
-        userForcedOn = wantOn && result == .ok
-        refresh()                              // applies UI + safety nets; switch reflects reality
+        refresh()                              // applies UI + battery floor; switch reflects reality
         if isOn, autoOffMinutes > 0 { startKeepAwakeTimer(minutes: autoOffMinutes) }
         return false
     }
@@ -1019,7 +1014,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     private func turnOffFromOutside() {
         setDisableSleep(false)
-        userForcedOn = false
         if statusItem != nil { refresh() }
     }
 
@@ -1153,11 +1147,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     private func loginItemEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
 
-    // MARK: - Claude Remote Control (Feature 4)
+    // MARK: - Claude Remote Control (Feature 3)
     // One supervised `claude remote-control` child per listed repo. It is a preference, not an
     // independent switch: servers run only while the Mac is kept awake, so closing the lid keeps
-    // remote sessions reachable and every existing auto-off path (timer, battery floor, Low
-    // Power Mode, manual toggle) tears them all down for free. RemoteControlConfig decides WHICH
+    // remote sessions reachable and every existing auto-off path (timer, battery floor,
+    // manual toggle) tears them all down for free. RemoteControlConfig decides WHICH
     // repos should run; this section only makes the running set match it.
     @objc private func rcToggled(_ sender: NSSwitch) {
         rcConfig.setEnabled(sender.state == .on)
@@ -1258,7 +1252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         rcStatusLabel?.stringValue = remoteControlCaption()
     }
 
-    // MARK: - Phone dashboard (Feature 5)
+    // MARK: - Phone dashboard (Feature 4)
     // Same lifecycle rule as Remote Control: it runs only while the Mac is kept awake and its
     // switch is on, so every auto-off path also takes the page offline. DashboardController owns
     // the server and the Wi-Fi work; this section is the popover side and the state it reports.
@@ -1337,7 +1331,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     func dashboardSleeplessSnapshot() -> SleeplessSnapshot {
         SleeplessSnapshot(on: isOn, floorPercent: batteryFloorPercent,
-                          lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
                           autoOffMinutes: autoOffMinutes, autoOffAt: isOn ? timerEndDate : nil)
     }
 
@@ -1434,7 +1427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     @objc private func refresh() {
         let on = readSleepDisabled()
         applyUI(on: on)
-        if on { enforceSafetyNets() }
+        if on { enforceBatteryFloor() }
     }
 
     private func applyUI(on: Bool) {
@@ -1455,7 +1448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
             }
             button.toolTip = on
                 ? (armed
-                    ? "Sleepless: on (battery). Auto-off at \(batteryFloorPercent)% or in Low Power Mode."
+                    ? "Sleepless: on (battery). Auto-off at \(batteryFloorPercent)%."
                     : "Sleepless: on. Stays awake with the lid closed.")
                 : "Sleepless: off. Sleeps normally."
         }
@@ -1474,7 +1467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private func renderText() {
         floorValueLabel?.stringValue = "\(batteryFloorPercent)%"
         captionLabel?.stringValue = isOn
-            ? "Stays awake when the lid is closed. Turns off at \(batteryFloorPercent)% battery or in Low Power Mode."
+            ? "Stays awake when the lid is closed. Turns off at \(batteryFloorPercent)% battery."
             : "Sleeps normally when you close the lid."
     }
 
@@ -1540,23 +1533,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
                 String(data: errData, encoding: .utf8) ?? "")
     }
 
-    // MARK: - Battery + Low-Power-Mode safety nets (silent; no extra UI) — Feature 3
-    private func enforceSafetyNets() {
+    // MARK: - Battery-floor safety net (silent; no extra UI) — never drain to empty
+    private func enforceBatteryFloor() {
         let (onBattery, discharging, percent) = batteryStatus()
-        guard onBattery, discharging else { return }
-        // Hard battery floor ALWAYS wins, even over a deliberate turn-on: never drain to empty.
-        if percent <= batteryFloorPercent {
-            setDisableSleep(false); userForcedOn = false
-            applyUI(on: readSleepDisabled())
-            notify("Battery low (\(percent)%). Sleepless turned off.")
-            return
-        }
-        // Low Power Mode auto-off, UNLESS the user deliberately chose to keep awake this session.
-        if ProcessInfo.processInfo.isLowPowerModeEnabled && !userForcedOn {
-            setDisableSleep(false)
-            applyUI(on: readSleepDisabled())
-            notify("Low Power Mode on. Sleepless turned off.")
-        }
+        guard onBattery, discharging, percent <= batteryFloorPercent else { return }
+        setDisableSleep(false)
+        applyUI(on: readSleepDisabled())
+        notify("Battery low (\(percent)%). Sleepless turned off.")
     }
 
     // MARK: - Readers (no root needed)

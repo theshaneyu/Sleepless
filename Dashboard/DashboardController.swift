@@ -10,7 +10,6 @@ import Foundation
 struct SleeplessSnapshot: Encodable {
     let on: Bool
     let floorPercent: Int
-    let lowPowerMode: Bool
     let autoOffMinutes: Int
     let autoOffAt: Date?
 }

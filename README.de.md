@@ -64,7 +64,6 @@ Klicke dann auf die Tasse in der Menüleiste, lege den Schalter um und schließe
 | ☕ | **Ein Schalter** | Klicke auf die Tasse in der Menüleiste, lege den Schalter um. |
 | ⏲️ | **Abschalt-Timer** | 1 h oder 2 h mit laufendem Countdown, danach aus. |
 | 🔋 | **Akku-Mindeststand** | Auto-Abschaltung bei 5–50 % im Akkubetrieb (Standard 15 %). |
-| 🪫 | **Low Power Mode** | Tritt zur Seite, wenn LPM im Akkubetrieb aktiv ist. |
 | 🖥️ | **Kein Dongle** | Deckel geschlossen, im Akkubetrieb. Kein Monitor, kein HDMI-Stecker. |
 | 🚀 | **Beim Anmelden starten** | Optional, standardmäßig aus, startet immer ausgeschaltet. |
 | 🪶 | **Winzig und nativ** | Eine AppKit-Datei. Kein Dock-Symbol, kein Daemon, keine kext. |
@@ -96,7 +95,7 @@ Klicke dann auf die Tasse in der Menüleiste, lege den Schalter um und schließe
 
 ## So funktioniert es
 
-Sleepless schaltet `pmset disablesleep` um (das `SleepDisabled`-Flag des Kernels), liest es zurück, sodass die Menüleiste nie lügt, und setzt es bei deinem Akku-Mindeststand, im Low Power Mode, beim Ablaufen des Timers oder beim Neustart zurück. Eine GUI-App kann kein Passwort eintippen, deshalb fügt das Installationsprogramm eine eng gefasste sudoers-Regel für **genau zwei Befehle** hinzu:
+Sleepless schaltet `pmset disablesleep` um (das `SleepDisabled`-Flag des Kernels), liest es zurück, sodass die Menüleiste nie lügt, und setzt es bei deinem Akku-Mindeststand, beim Ablaufen des Timers oder beim Neustart zurück. Eine GUI-App kann kein Passwort eintippen, deshalb fügt das Installationsprogramm eine eng gefasste sudoers-Regel für **genau zwei Befehle** hinzu:
 
 ```
 <you> ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
@@ -132,7 +131,7 @@ Diese nutzen die Power Assertions von macOS, die den Leerlauf-Timer stoppen, abe
 <details>
 <summary><b>Ist es sicher? Überhitzt es oder zieht es den Akku leer?</b></summary>
 
-Für leichte, unbeaufsichtigte Arbeit (Downloads, Synchronisierungen, einen Hotspot) ist es sicher. Schwere Dauerlast bei ganz geschlossenem Deckel verringert den Luftstrom, geh also mit Augenmaß vor. Der Akku-Mindeststand, die Auto-Abschaltung im Low Power Mode und der Timer stoppen es alle, bevor es den Mac leerzieht.
+Für leichte, unbeaufsichtigte Arbeit (Downloads, Synchronisierungen, einen Hotspot) ist es sicher. Schwere Dauerlast bei ganz geschlossenem Deckel verringert den Luftstrom, geh also mit Augenmaß vor. Der Akku-Mindeststand und der Timer stoppen es beide, bevor es den Mac leerzieht.
 </details>
 
 <details>
