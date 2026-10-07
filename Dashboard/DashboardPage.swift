@@ -412,6 +412,8 @@ const ICON = {
   spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>',
   power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  // Two interlocked rings, like iOS's Personal Hotspot glyph: each ring breaks where the other passes over it.
+  hotspot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M14.87 17.06A6 6 0 1 1 15.31 13.58"/><path d="M9.13 6.94A6 6 0 1 1 8.69 10.42"/></svg>',
   window: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/></svg>',
   info: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 4.6a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8ZM13.2 17h-2.4v-6h2.4v6Z"/></svg>',
 };
@@ -455,6 +457,10 @@ function strength(rssi) {
   if (rssi >= -72) return { level: 2, word: "訊號良好" };
   return { level: 1, word: "訊號弱" };
 }
+// iPhone hotspots are named after the phone by default, so the name is the tell.
+const isHotspot = (ssid) => /iphone|熱點|hotspot/i.test(ssid ?? "");
+const networkIcon = (ssid, level) => (isHotspot(ssid) ? ICON.hotspot : wifiIcon(level));
+
 function wifiIcon(level) {
   const lit = (n) => (level >= n ? "lit" : "");
   return `<svg class="bars" viewBox="0 0 24 24"><path class="${lit(1)}" d="M12 20.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/>` +
@@ -541,7 +547,7 @@ function renderCurrent(w) {
   const card = $("current"), name = $("current-name"), sub = $("current-sub");
   const s = strength(w.rssi);
   card.classList.toggle("none", !w.current);
-  $("current-badge").innerHTML = wifiIcon(w.current ? s.level : 0);
+  $("current-badge").innerHTML = networkIcon(w.current, w.current ? s.level : 0);
   if (!w.locationAuthorized) {
     name.textContent = "無法讀取網路名稱";
     sub.textContent = "請在 Mac 上允許 Sleepless 使用定位服務";
@@ -566,14 +572,14 @@ function renderNetworks() {
       const usable = n.saved && n.inRange;
       const sub = !n.saved ? "尚未在 Mac 上儲存密碼" : !n.inRange ? "不在範圍內" : `已儲存 · ${s.word}`;
       const row = el(usable ? "button" : "div", { class: `net${usable ? " pressable" : " muted"}` },
-        el("div", { class: "sig", html: wifiIcon(n.inRange ? s.level : 0) }),
+        el("div", { class: "sig", html: networkIcon(n.ssid, n.inRange ? s.level : 0) }),
         el("div", { class: "meta" }, el("div", { class: "name" }, n.ssid), el("div", { class: "sub" }, sub)),
         usable ? el("span", { class: "pill" }, "切換") : null);
       if (usable) row.addEventListener("click", () => confirmSwitch(n.ssid));
       return row;
     }));
   }
-  const hotspotAway = nets.some((n) => n.saved && !n.inRange && /iphone|熱點|hotspot/i.test(n.ssid));
+  const hotspotAway = nets.some((n) => n.saved && !n.inRange && isHotspot(n.ssid));
   const hint = $("hint");
   hint.replaceChildren();
   if (hotspotAway) hint.append(el("span", { html: ICON.info }), "iPhone 熱點要在「設定 › 個人熱點」畫面開著時才會出現，打開後再按右上角重新掃描。");
@@ -808,7 +814,7 @@ $("scrim").addEventListener("click", () => state.sheet?.dismissable && closeShee
 function confirmSwitch(ssid) {
   const from = state.status?.wifi?.current;
   openSheet("confirm", () => [
-    el("div", { class: "hero", html: wifiIcon(3) }),
+    el("div", { class: "hero", html: networkIcon(ssid, 3) }),
     el("h3", {}, `切換到${quote(ssid)}？`),
     el("p", { class: "body" }, `Mac 會暫時斷線幾秒鐘。${from ? `如果 45 秒內連不上網路，會自動切回${quote(from)}。` : ""}`),
     el("div", { class: "actions" },
