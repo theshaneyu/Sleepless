@@ -303,6 +303,18 @@ let dashboardPage = #"""
   .step.done .mark { background: var(--green); border-color: var(--green); color: #fff; }
   .step.error { color: var(--text); }
   .step.error .mark { background: var(--red); border-color: var(--red); color: #fff; }
+  .choices { margin-top: 20px; background: var(--tile-2); border-radius: 16px; overflow: hidden; }
+  .choice { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 16px; position: relative; }
+  .choice + .choice::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: 1px; background: var(--sep); }
+  .choice:active { background: var(--track); }
+  .choice .meta { flex: 1; min-width: 0; }
+  .choice .title { font-size: 17px; font-weight: 600; }
+  .choice .sub { font-size: 13px; color: var(--text-2); margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .choice .mark { width: 22px; height: 22px; flex: none; color: var(--accent); opacity: 0; }
+  .choice .mark svg { width: 22px; height: 22px; }
+  .choice.selected .title { color: var(--accent); }
+  .choice.selected .mark, .choice.busy .mark { opacity: 1; }
+  .choice.busy .mark svg { animation: spin .9s linear infinite; }
   .sheet .note { font-size: 13px; color: var(--text-2); text-align: center; margin-top: 16px; min-height: 18px; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -350,11 +362,12 @@ let dashboardPage = #"""
       <div class="chip" id="lpm" hidden><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>低耗電模式</div>
     </button>
 
-    <article class="tile timer idle rise" id="timer" style="animation-delay:.12s">
-      <div class="tile-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>自動關閉</div>
+    <button class="tile timer idle pressable rise" id="timer" style="animation-delay:.12s">
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+      <div class="tile-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>計時關閉</div>
       <div class="tile-value rounded" id="timer-value">未設定</div>
-      <div class="tile-sub" id="timer-sub">可在 Mac 上設定</div>
-    </article>
+      <div class="tile-sub" id="timer-sub">點一下設定</div>
+    </button>
   </section>
 
   <section class="section rise" style="animation-delay:.16s">
@@ -412,6 +425,7 @@ const ICON = {
   spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>',
   power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  timer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>',
   // Two interlocked rings, like iOS's Personal Hotspot glyph: each ring breaks where the other passes over it.
   hotspot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M14.87 17.06A6 6 0 1 1 15.31 13.58"/><path d="M9.13 6.94A6 6 0 1 1 8.69 10.42"/></svg>',
   window: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/></svg>',
@@ -540,7 +554,8 @@ function renderTimer() {
   const active = at && at > Date.now();
   tile.classList.toggle("idle", !active);
   $("timer-value").textContent = active ? countdown(at - Date.now()) : "未設定";
-  $("timer-sub").textContent = active ? `${clock(at)} 關閉` : "可在 Mac 上設定";
+  $("timer-sub").textContent = active ? `${clock(at)} 關閉` : "點一下設定";
+  if (state.sheet?.kind === "timer") renderTimerChoices();
 }
 
 function renderCurrent(w) {
@@ -925,6 +940,65 @@ function openSleeplessSheet() {
   ]);
 }
 
+// ---------- auto-off timer ----------
+const AUTO_OFF = [[0, "不自動關閉"], [60, "1 小時後"], [120, "2 小時後"]];
+
+function timerChoiceSub(minutes) {
+  const s = state.status?.sleepless;
+  const at = s?.autoOffAt ? new Date(s.autoOffAt) : null;
+  if (!minutes) return "保持喚醒，直到你關閉 Sleepless";
+  if (s?.autoOffMinutes === minutes && at > Date.now()) return `還剩 ${countdown(at - Date.now())} · 再點一下重新計時`;
+  return `${clock(new Date(Date.now() + minutes * 60000))} 關閉`;
+}
+
+// Updates the rows in place: rebuilding them every second would swallow a tap in progress.
+function renderTimerChoices() {
+  const chosen = state.status?.sleepless?.autoOffMinutes ?? 0;
+  for (const [minutes] of AUTO_OFF) {
+    const row = document.getElementById(`choice-${minutes}`);
+    if (!row) continue;
+    const busy = state.settingAutoOff === minutes;
+    row.className = `choice${busy ? " busy" : minutes === chosen && state.settingAutoOff == null ? " selected" : ""}`;
+    row.querySelector(".mark").innerHTML = busy ? ICON.spinner : ICON.check;
+    row.querySelector(".sub").textContent = timerChoiceSub(minutes);
+  }
+}
+
+function openTimerSheet() {
+  if (!state.status?.sleepless?.on) return;
+  openSheet("timer", () => [
+    el("div", { class: "hero", html: ICON.timer }),
+    el("h3", {}, "計時關閉"),
+    el("p", { class: "body" }, "時間到時 Sleepless 會關閉，闔著螢幕的 Mac 會進入睡眠，這個頁面也會中斷。"),
+    el("div", { class: "choices" }, AUTO_OFF.map(([minutes, label]) =>
+      el("button", { class: "choice", id: `choice-${minutes}`, onclick: () => setAutoOff(minutes) },
+        el("div", { class: "meta" }, el("div", { class: "title" }, label), el("div", { class: "sub" })),
+        el("span", { class: "mark" })))),
+    el("div", { class: "actions" }, el("button", { class: "btn plain pressable", onclick: closeSheet }, "完成")),
+  ]);
+  renderTimerChoices();
+}
+
+async function setAutoOff(minutes) {
+  if (state.settingAutoOff != null) return;
+  state.settingAutoOff = minutes;
+  renderTimerChoices();
+  try {
+    const res = await api("/api/sleepless/auto-off", { method: "POST", body: { minutes } });
+    if (!res.ok) return toast("無法設定計時關閉。");
+    state.status.sleepless = res.body;
+    state.settingAutoOff = null;
+    render();
+    closeSheet();
+    const at = res.body.autoOffAt ? new Date(res.body.autoOffAt) : null;
+    toast(at ? `Sleepless 會在 ${clock(at)} 自動關閉。` : "已取消計時關閉。", { good: true });
+  } catch { toast("無法連線到 Mac。"); }
+  finally {
+    state.settingAutoOff = null;
+    renderTimerChoices();
+  }
+}
+
 async function turnOff() {
   closeSheet();
   try {
@@ -1020,6 +1094,7 @@ async function loadNetworks() {
 // ---------- wiring ----------
 $("scan").addEventListener("click", loadNetworks);
 $("awake").addEventListener("click", openSleeplessSheet);
+$("timer").addEventListener("click", openTimerSheet);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") { poll(); loadNetworks(); loadApps(); }
   else { clearTimeout(pollTimer); clearTimeout(appsTimer); }

@@ -65,6 +65,7 @@ private let rcEnabledKey = "remoteControlEnabled"
 private let rcReposKey = "remoteControlRepos"
 private let rcLegacyRepoKey = "remoteControlRepo"   // the single repo of 1.3.x, migrated on launch
 private let dashboardEnabledKey = "phoneDashboardEnabled"
+let autoOffChoices = [0, 60, 120]   // minutes, in the order of the popover's Off | 1h | 2h segments
 private let rcProjectsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects")
 // Supervisor backoff. `claude remote-control` exits on its own after roughly 10 minutes
 // without network, so a short outage must not need a manual restart — but a permanently
@@ -592,7 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var userForcedOn = false   // user deliberately turned it on; honor over the Low Power Mode auto-off (the hard battery floor still wins)
 
     // Auto-off timer (in-memory; dies on quit, never survives a reboot)
-    private var autoOffMinutes = 0           // 0 = none (stay on until off), 60, or 120
+    private var autoOffMinutes = 0           // one of autoOffChoices; 0 = none (stay on until off)
     private var keepAwakeTimer: Timer?       // one-shot: flips sleep back on when it fires
     private var countdownTicker: Timer?      // 1 Hz label refresh, only while the popover is open
     private var timerEndDate: Date?
@@ -1077,11 +1078,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     // MARK: - Auto-off timer (Feature 1)
     @objc private func autoOffChanged(_ sender: NSSegmentedControl) {
-        switch sender.selectedSegment {
-        case 1: autoOffMinutes = 60
-        case 2: autoOffMinutes = 120
-        default: autoOffMinutes = 0
-        }
+        setAutoOff(minutes: autoOffChoices.indices.contains(sender.selectedSegment) ? autoOffChoices[sender.selectedSegment] : 0)
+    }
+
+    // Choosing a timer (again) starts it from now, from the popover or from the phone alike.
+    private func setAutoOff(minutes: Int) {
+        autoOffMinutes = minutes
+        autoOffControl?.selectedSegment = autoOffChoices.firstIndex(of: minutes) ?? 0
         if isOn, autoOffMinutes > 0 {
             startKeepAwakeTimer(minutes: autoOffMinutes)
         } else {
@@ -1335,10 +1338,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     func dashboardSleeplessSnapshot() -> SleeplessSnapshot {
         SleeplessSnapshot(on: isOn, floorPercent: batteryFloorPercent,
                           lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                          autoOffAt: isOn ? timerEndDate : nil)
+                          autoOffMinutes: autoOffMinutes, autoOffAt: isOn ? timerEndDate : nil)
     }
 
     func dashboardTurnOff() { turnOffFromOutside() }
+
+    func dashboardSetAutoOff(minutes: Int) { setAutoOff(minutes: minutes) }
 
     // MARK: - Repo picker (page 2)
     @objc private func cancelRepoPick() { showPicker(false) }

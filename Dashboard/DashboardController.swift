@@ -11,6 +11,7 @@ struct SleeplessSnapshot: Encodable {
     let on: Bool
     let floorPercent: Int
     let lowPowerMode: Bool
+    let autoOffMinutes: Int
     let autoOffAt: Date?
 }
 
@@ -18,6 +19,7 @@ struct SleeplessSnapshot: Encodable {
 protocol DashboardHost: AnyObject {
     func dashboardSleeplessSnapshot() -> SleeplessSnapshot
     func dashboardTurnOff()
+    func dashboardSetAutoOff(minutes: Int)
 }
 
 private struct TailscaleSelf: Sendable {
@@ -180,10 +182,18 @@ final class DashboardController {
                 return respond(json(409, ["code": refusal.rawValue]))
             }
             respond(json(202, ["ok": true]))
+        case ("POST", "/api/sleepless/auto-off"):
+            struct AutoOff: Decodable { let minutes: Int }
+            guard let body = try? JSONDecoder().decode(AutoOff.self, from: request.body),
+                  autoOffChoices.contains(body.minutes), let host else {
+                return respond(.text(400, "Expected {\"minutes\": 0, 60 or 120}."))
+            }
+            host.dashboardSetAutoOff(minutes: body.minutes)
+            respond(json(200, host.dashboardSleeplessSnapshot()))
         case ("POST", "/api/sleepless/off"):
             respond(json(202, ["ok": true]))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.host?.dashboardTurnOff() }
-        case (_, "/"), (_, "/api/status"), (_, "/api/wifi/networks"), (_, "/api/wifi/switch"), (_, "/api/sleepless/off"),
+        case (_, "/"), (_, "/api/status"), (_, "/api/wifi/networks"), (_, "/api/wifi/switch"), (_, "/api/sleepless/off"), (_, "/api/sleepless/auto-off"),
              (_, "/api/apps"), (_, "/api/apps/quit"):
             respond(.text(405, "Method not allowed"))
         default:
