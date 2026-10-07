@@ -1230,12 +1230,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         return isOn ? "Start a session from the Claude app." : "Starts when you turn Sleepless on."
     }
 
-    private func remoteControlIndicator(for repo: String) -> RemoteControlIndicator {
-        let server = rcServers[repo]
-        return rcConfig.indicator(for: repo, keepAwake: isOn, connected: server?.connected ?? false,
-                                  stopping: server?.isStopping ?? false)
-    }
-
     private func renderRemoteControlUI() {
         rcSwitch?.state = rcConfig.enabled ? .on : .off
         for (i, row) in rcRows.enumerated() {
@@ -1243,7 +1237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
             guard !row.isHidden else { continue }
             let repo = rcConfig.repos[i]
             let server = rcServers[repo]
-            let indicator = remoteControlIndicator(for: repo)
+            let indicator = rcConfig.indicator(for: repo, keepAwake: isOn, connected: server?.connected ?? false,
+                                               stopping: server?.isStopping ?? false)
             let detail = switch indicator {
             case .off: ""
             case .stopping: "Stopping\u{2026}"
@@ -1339,10 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     func dashboardSleeplessSnapshot() -> SleeplessSnapshot {
         SleeplessSnapshot(on: isOn, floorPercent: batteryFloorPercent,
                           lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                          autoOffAt: isOn ? timerEndDate : nil,
-                          remoteControl: rcConfig.repos.map {
-                              RemoteControlSnapshot(repo: $0, state: "\(remoteControlIndicator(for: $0))")
-                          })
+                          autoOffAt: isOn ? timerEndDate : nil)
     }
 
     func dashboardTurnOff() { turnOffFromOutside() }

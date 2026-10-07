@@ -11,14 +11,21 @@ enum WifiSwitchRefusal: Error, Equatable, Sendable {
     case noWayBack(String)
     case notInRange(String)
 
-    var message: String {
+    // What the phone gets back; it words the reason in its own language.
+    var code: String {
         switch self {
-        case .busy: "A switch is already in progress."
-        case .alreadyConnected: "The Mac is already on that network."
-        case .noSavedPassword(let ssid): "No password saved for \(ssid). Save it in Sleepless first."
-        case .noWayBack(let ssid):
-            "No password saved for \(ssid), the network the Mac is on now, so it couldn\u{2019}t come back if the switch fails."
-        case .notInRange(let ssid): "\(ssid) isn\u{2019}t in range. An iPhone hotspot shows up while its Personal Hotspot screen is open."
+        case .busy: "busy"
+        case .alreadyConnected: "alreadyConnected"
+        case .noSavedPassword: "noSavedPassword"
+        case .noWayBack: "noWayBack"
+        case .notInRange: "notInRange"
+        }
+    }
+
+    var ssid: String? {
+        switch self {
+        case .busy, .alreadyConnected: nil
+        case .noSavedPassword(let ssid), .noWayBack(let ssid), .notInRange(let ssid): ssid
         }
     }
 }

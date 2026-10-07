@@ -7,17 +7,11 @@
 import AppKit
 import Foundation
 
-struct RemoteControlSnapshot: Encodable {
-    let repo: String
-    let state: String
-}
-
 struct SleeplessSnapshot: Encodable {
     let on: Bool
     let floorPercent: Int
     let lowPowerMode: Bool
     let autoOffAt: Date?
-    let remoteControl: [RemoteControlSnapshot]
 }
 
 @MainActor
@@ -167,7 +161,7 @@ final class DashboardController {
             wifi.requestSwitch(to: ssid) { result in
                 switch result {
                 case .success(let state): respond(json(202, state))
-                case .failure(let refusal): respond(json(409, ["error": refusal.message]))
+                case .failure(let refusal): respond(json(409, ["code": refusal.code, "ssid": refusal.ssid]))
                 }
             }
         case ("POST", "/api/sleepless/off"):

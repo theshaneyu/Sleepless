@@ -10,8 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Phone dashboard.** A new switch in the popover, off by default. While Sleepless keeps the
   Mac awake it serves one page to your phone over Tailscale: battery level and time left, the
-  Wi-Fi network the Mac is on, Sleepless and Remote Control state, and a button to turn
-  Sleepless off. The server listens on `127.0.0.1:47800` only. `tailscale serve --bg 47800`
+  Wi-Fi network the Mac is on, Sleepless state and its auto-off countdown, and a way to turn
+  Sleepless off. The page is in Traditional Chinese, follows the phone's light or dark mode,
+  and can be added to the Home Screen. Confirmations open as bottom sheets you can swipe down
+  to dismiss. The server listens on `127.0.0.1:47800` only. `tailscale serve --bg 47800`
   (run once) publishes it inside your tailnet over HTTPS, and every request must come through
   serve and carry the Mac owner's Tailscale login.
 - **Switch the Mac's Wi-Fi from the phone.** Save a network's password under **Wi-Fi

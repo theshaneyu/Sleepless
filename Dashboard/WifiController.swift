@@ -24,10 +24,11 @@ struct WifiNetwork: Encodable, Sendable {
 
 struct WifiSwitchState: Encodable, Sendable {
     enum Phase: String, Encodable, Sendable { case switching, verifying, done, reverting, reverted, failed }
+    enum Reason: String, Encodable, Sendable { case joinFailed, noInternet }   // why it left the target
     let phase: Phase
     let target: String
     let from: String?
-    let message: String
+    let reason: Reason?
     let updatedAt: Date
 
     var inProgress: Bool { [.switching, .verifying, .reverting].contains(phase) }
@@ -140,7 +141,7 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
             return completion(.failure(refusal))   // everything but range, which needs a scan
         }
 
-        update(.switching, target: target, from: from, "Switching to \(target)\u{2026}")
+        update(.switching, target: target, from: from)
         let started = switchState!
         worker.async { [weak self] in
             let targetPassword = WifiPasswords.read(ssid: target)
@@ -159,8 +160,8 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
             }
             guard refusal == nil else { return }
             Thread.sleep(forTimeInterval: switchDelay)
-            let report: @Sendable (WifiSwitchState.Phase, String) -> Void = { [weak self] phase, message in
-                Task { @MainActor [weak self] in self?.update(phase, target: target, from: from, message) }
+            let report: @Sendable (WifiSwitchState.Phase, WifiSwitchState.Reason?) -> Void = { [weak self] phase, reason in
+                Task { @MainActor [weak self] in self?.update(phase, target: target, from: from, reason: reason) }
             }
             Self.performSwitch(target: target, password: targetPassword, from: from, fromPassword: fromPassword,
                                report: report)
@@ -168,37 +169,31 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
     }
 
     private nonisolated static func performSwitch(target: String, password: String?, from: String?, fromPassword: String?,
-                                                  report: @Sendable (WifiSwitchState.Phase, String) -> Void) {
-        var problem: String
+                                                  report: @Sendable (WifiSwitchState.Phase, WifiSwitchState.Reason?) -> Void) {
+        let reason: WifiSwitchState.Reason
         if let failure = WifiRadio.join(target, password: password) {
-            problem = failure
+            NSLog("Sleepless: Wi-Fi switch to %@ failed: %@", target, failure)
+            reason = .joinFailed
         } else {
-            report(.verifying, "Joined \(target). Checking the internet\u{2026}")
-            if WifiRadio.waitForInternet(timeout: verifyTimeout) {
-                report(.done, "On \(target).")
-                return
-            }
-            problem = "\(target) had no internet within \(Int(verifyTimeout))s (wrong password or a login page?)."
+            report(.verifying, nil)
+            if WifiRadio.waitForInternet(timeout: verifyTimeout) { return report(.done, nil) }
+            reason = .noInternet
         }
-        guard let from else {
-            report(.failed, problem + " There was no previous network to go back to.")
-            return
-        }
-        report(.reverting, problem + " Going back to \(from)\u{2026}")
+        // With no previous network there is nothing to go back to; macOS picks a known one itself.
+        guard let from else { return report(.failed, reason) }
+        report(.reverting, reason)
         for _ in 0..<revertAttempts {
             if WifiRadio.join(from, password: fromPassword) == nil, WifiRadio.waitForInternet(timeout: verifyTimeout) {
-                report(.reverted, problem + " Back on \(from).")
-                return
+                return report(.reverted, reason)
             }
             Thread.sleep(forTimeInterval: 5)
         }
-        problem += " Couldn\u{2019}t rejoin \(from) either; macOS will pick a known network on its own."
-        report(.failed, problem)
+        report(.failed, reason)
     }
 
-    private func update(_ phase: WifiSwitchState.Phase, target: String, from: String?, _ message: String) {
-        switchState = WifiSwitchState(phase: phase, target: target, from: from, message: message, updatedAt: Date())
-        NSLog("Sleepless: Wi-Fi switch %@: %@", phase.rawValue, message)
+    private func update(_ phase: WifiSwitchState.Phase, target: String, from: String?, reason: WifiSwitchState.Reason? = nil) {
+        switchState = WifiSwitchState(phase: phase, target: target, from: from, reason: reason, updatedAt: Date())
+        NSLog("Sleepless: Wi-Fi switch to %@ (from %@): %@ %@", target, from ?? "none", phase.rawValue, reason?.rawValue ?? "")
         onChange?()
     }
 }
