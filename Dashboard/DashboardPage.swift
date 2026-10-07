@@ -96,14 +96,14 @@ let dashboardPage = #"""
   .eyebrow { font-size: 13px; font-weight: 500; color: var(--text-2); letter-spacing: .01em; }
   h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; margin-top: 2px;
        overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .live { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 10px;
+  .live { flex: none; display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 13px;
           border-radius: 15px; background: var(--tile); box-shadow: var(--shadow); font-size: 13px; font-weight: 600; margin-top: 2px; }
   .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); position: relative; }
-  .live .dot::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; background: inherit; opacity: .35; animation: pulse 2s ease-out infinite; }
+  .live .dot::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; background: inherit; opacity: .35; animation: pulse 2s ease-out infinite; }
   .live.stale .dot { background: var(--amber); }
   .live.gone .dot { background: var(--text-3); }
   .live.gone .dot::after { display: none; }
-  @keyframes pulse { 0% { transform: scale(.6); opacity: .5; } 100% { transform: scale(1.8); opacity: 0; } }
+  @keyframes pulse { 0% { transform: scale(.6); opacity: .5; } 100% { transform: scale(1.6); opacity: 0; } }
 
   /* Bento */
   .bento { display: grid; grid-template-columns: 1.08fr 1fr; grid-template-rows: auto auto; gap: 12px; }
