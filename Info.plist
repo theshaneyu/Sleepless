@@ -19,6 +19,10 @@
             <key>CFBundleURLSchemes</key>  <array><string>sleepless</string></array>
         </dict>
     </array>
+    <key>NSLocationUsageDescription</key>
+    <string>The phone dashboard shows which Wi-Fi network your Mac is on and which saved networks are in range. macOS only reveals Wi-Fi names to apps with Location Services access.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>The phone dashboard shows which Wi-Fi network your Mac is on and which saved networks are in range. macOS only reveals Wi-Fi names to apps with Location Services access.</string>
     <key>NSHumanReadableCopyright</key>    <string>Copyright © 2026 Adam Boudjemaa. MIT License.</string>
 </dict>
 </plist>

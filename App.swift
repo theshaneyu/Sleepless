@@ -20,7 +20,7 @@
 // FULL cup means it is being kept awake (caffeinated), and a full cup with a small
 // dot means it is awake on battery with the auto-off safety net live.
 //
-// Four small, fail-safe features layer on top, none of which adds a daemon or
+// Five small, fail-safe features layer on top, none of which adds a daemon or
 // persists OS state (so "reboot resets it" still holds):
 //   1. Auto-off timer (1h / 2h) — a one-shot in-memory Timer that flips sleep back
 //      on when it fires. Dies on quit; nothing survives a reboot.
@@ -34,10 +34,13 @@
 //      to five), so new Claude Code sessions can be started from the phone with the lid
 //      closed. They are child processes, not daemons: they start and die with the keep-awake
 //      switch, and the OS reaps them on sleep. The rules live in Core/RemoteControlConfig.swift.
+//   5. Phone dashboard — OFF by default. While the Mac is kept awake, a loopback-only web page
+//      shows battery, Wi-Fi and Sleepless state to your phone through `tailscale serve`, and can
+//      move the Mac to another Wi-Fi network you saved a password for (Dashboard/).
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \
-//          -framework ServiceManagement App.swift Core/*.swift
+//          -framework ServiceManagement App.swift Core/*.swift Dashboard/*.swift
 //   File MUST be named App.swift and compiled -parse-as-library so the
 //   @main enum + @MainActor static main() entry is Swift-6 isolation-safe.
 //   Core/ holds the AppKit-free logic that `swift test` covers.
@@ -60,6 +63,7 @@ private let floorMax = 50
 private let rcEnabledKey = "remoteControlEnabled"
 private let rcReposKey = "remoteControlRepos"
 private let rcLegacyRepoKey = "remoteControlRepo"   // the single repo of 1.3.x, migrated on launch
+private let dashboardEnabledKey = "phoneDashboardEnabled"
 private let rcProjectsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects")
 // Supervisor backoff. `claude remote-control` exits on its own after roughly 10 minutes
 // without network, so a short outage must not need a manual restart — but a permanently
@@ -562,7 +566,7 @@ private final class RemoteControlServer: NSObject {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate,
+final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
                          NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
@@ -600,9 +604,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     private var rcCountLabel: NSTextField!
     private var rcStatusLabel: NSTextField!
     private var loginCard: CardView!        // follows the Remote Control card as its list grows
+    private var dashboardCard: CardView!    // also follows it, between it and the login card
     private var quitButton: NSButton!
     private var rcConfig = RemoteControlConfig(enabled: true, repos: [])
     private var rcServers: [String: RemoteControlServer] = [:]
+
+    // Phone dashboard (Feature 5)
+    private let dashboard = DashboardController()
+    private var dashboardEnabled = false
+    private var dashboardSwitch: NSSwitch!
+    private var dashboardStatusLabel: NSTextField!
+    private var wifiPasswordsCountLabel: NSTextField!
 
     // Searchable repo picker (second page of the popover)
     private var settingsPage: FlippedView!
@@ -624,6 +636,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         rcConfig = .load(enabled: defaults.object(forKey: rcEnabledKey) as? Bool,
                          repos: defaults.stringArray(forKey: rcReposKey),
                          legacyRepo: defaults.string(forKey: rcLegacyRepoKey))
+        dashboardEnabled = defaults.bool(forKey: dashboardEnabledKey)
+        dashboard.host = self
+        dashboard.onChange = { [weak self] in self?.renderDashboardUI() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = offGlyph
@@ -796,7 +811,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         rcStatusLabel.cell?.wraps = true
         g4.addSubview(rcStatusLabel)
 
-        // GROUP 5 — launch at login (off by default; never auto-enables sleep prevention)
+        // GROUP 5 — phone dashboard (off by default). Placed by layoutRemoteControlCard().
+        let g5d = makeCard(NSRect(x: pad, y: 0, width: contentW, height: ci + 86 + ci))
+        dashboardCard = g5d
+        let dashboardLabel = makeLabel("Phone dashboard", font: .systemFont(ofSize: 13), color: .labelColor)
+        dashboardLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
+        g5d.addSubview(dashboardLabel)
+        dashboardSwitch = NSSwitch()
+        dashboardSwitch.target = self
+        dashboardSwitch.action = #selector(dashboardToggled(_:))
+        dashboardSwitch.state = dashboardEnabled ? .on : .off
+        dashboardSwitch.frame = NSRect(x: contentW - ci - swW, y: ci + (22 - swH) / 2, width: swW, height: swH)
+        g5d.addSubview(dashboardSwitch)
+        dashboardStatusLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
+        dashboardStatusLabel.frame = NSRect(x: ci, y: ci + 28, width: cw, height: 28)
+        dashboardStatusLabel.usesSingleLineMode = false
+        dashboardStatusLabel.lineBreakMode = .byCharWrapping
+        dashboardStatusLabel.maximumNumberOfLines = 2
+        dashboardStatusLabel.cell?.wraps = true
+        dashboardStatusLabel.isSelectable = true   // the URL is worth copying
+        g5d.addSubview(dashboardStatusLabel)
+        let wifiButton = NSButton(title: "Wi-Fi passwords\u{2026}",
+                                  image: NSImage(systemSymbolName: "wifi", accessibilityDescription: nil) ?? NSImage(),
+                                  target: self, action: #selector(wifiPasswordsClicked))
+        wifiButton.imagePosition = .imageLeading
+        wifiButton.bezelStyle = .rounded
+        wifiButton.controlSize = .small
+        wifiButton.font = .systemFont(ofSize: 11)
+        wifiButton.sizeToFit()
+        wifiButton.frame = NSRect(x: ci, y: ci + 64, width: wifiButton.frame.width + 6, height: 20)
+        g5d.addSubview(wifiButton)
+        wifiPasswordsCountLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .tertiaryLabelColor)
+        wifiPasswordsCountLabel.alignment = .right
+        wifiPasswordsCountLabel.frame = NSRect(x: contentW - ci - 80, y: ci + 67, width: 80, height: 14)
+        g5d.addSubview(wifiPasswordsCountLabel)
+
+        // GROUP 6 — launch at login (off by default; never auto-enables sleep prevention)
         let g5h: CGFloat = 46
         let g5 = makeCard(NSRect(x: pad, y: 0, width: contentW, height: g5h))
         loginCard = g5
@@ -874,13 +924,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     // Everything from the Remote Control list down moves with the number of repos in it.
     private func layoutRemoteControlCard() {
-        guard let rcCard, let loginCard, let quitButton else { return }
+        guard let rcCard, let dashboardCard, let loginCard, let quitButton else { return }
         let addY = rcRowsTop + CGFloat(rcConfig.repos.count) * rcRowHeight
         rcAddButton.frame.origin.y = addY
         rcCountLabel.frame.origin.y = addY + 3
         rcStatusLabel.frame.origin.y = addY + 28
         rcCard.frame.size.height = rcStatusLabel.frame.maxY + 8
-        loginCard.frame.origin.y = rcCard.frame.maxY + 12
+        dashboardCard.frame.origin.y = rcCard.frame.maxY + 12
+        loginCard.frame.origin.y = dashboardCard.frame.maxY + 12
         quitButton.frame.origin.y = loginCard.frame.maxY + 12
         popover.contentSize = NSSize(width: popoverWidth, height: quitButton.frame.maxY + 16)
     }
@@ -911,6 +962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         startCountdownTicker()                 // drives both the auto-off countdown and the reconnect countdown
         updateCountdownLabel()
         renderRemoteControlUI()
+        renderDashboardUI()
         // Close when the user clicks anywhere outside the app (status bar, another app, desktop).
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.closePopover()
@@ -960,6 +1012,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
     // what launched the app; launch then reads the true state itself, so only refresh after.
     func application(_ application: NSApplication, open urls: [URL]) {
         guard urls.contains(where: { URLCommand($0) == .turnOff }) else { return }
+        turnOffFromOutside()
+    }
+
+    private func turnOffFromOutside() {
         setDisableSleep(false)
         userForcedOn = false
         if statusItem != nil { refresh() }
@@ -1198,6 +1254,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         rcStatusLabel?.stringValue = remoteControlCaption()
     }
 
+    // MARK: - Phone dashboard (Feature 5)
+    // Same lifecycle rule as Remote Control: it runs only while the Mac is kept awake and its
+    // switch is on, so every auto-off path also takes the page offline. DashboardController owns
+    // the server and the Wi-Fi work; this section is the popover side and the state it reports.
+    @objc private func dashboardToggled(_ sender: NSSwitch) {
+        dashboardEnabled = sender.state == .on
+        UserDefaults.standard.set(dashboardEnabled, forKey: dashboardEnabledKey)
+        syncDashboard()
+    }
+
+    private func syncDashboard() {
+        dashboard.sync(shouldRun: isOn && dashboardEnabled)
+        renderDashboardUI()
+    }
+
+    private func dashboardCaption() -> String {
+        guard dashboardEnabled else { return "Off. Shows battery and Wi-Fi on your phone over Tailscale." }
+        if let problem = dashboard.problem { return problem.message }
+        guard isOn else { return "Starts when you turn Sleepless on." }
+        guard let url = dashboard.url else { return "Waiting for Tailscale\u{2026}" }
+        guard dashboard.wifi.locationAuthorized else {
+            return "Allow Location Services for Sleepless so it can see Wi-Fi names."
+        }
+        return url
+    }
+
+    private func renderDashboardUI() {
+        dashboardSwitch?.state = dashboardEnabled ? .on : .off
+        dashboardStatusLabel?.stringValue = dashboardCaption()
+        let saved = WifiPasswords.savedSSIDs().count
+        wifiPasswordsCountLabel?.stringValue = saved == 0 ? "None saved" : "\(saved) saved"
+    }
+
+    // The phone can only switch to networks saved here, and only away from one saved here too.
+    @objc private func wifiPasswordsClicked() {
+        let saved = WifiPasswords.savedSSIDs()
+        let current = dashboard.wifi.currentSSID
+        var names: [String] = []
+        for name in [current].compactMap({ $0 }) + saved.sorted() + dashboard.wifi.knownSSIDs where !names.contains(name) {
+            names.append(name)
+        }
+
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 32, width: 280, height: 26), pullsDown: false)
+        for name in names {   // via the menu: addItem(withTitle:) would merge look-alike names
+            let item = NSMenuItem(title: name + (saved.contains(name) ? "  \u{2713}" : "") + (name == current ? "  (current)" : ""),
+                                  action: nil, keyEquivalent: "")
+            item.representedObject = name
+            popup.menu?.addItem(item)
+        }
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "Password"
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 58))
+        accessory.addSubview(popup)
+        accessory.addSubview(field)
+
+        let alert = NSAlert()
+        alert.messageText = "Wi-Fi passwords for the phone dashboard"
+        alert.informativeText = "The phone can move the Mac between networks saved here (\u{2713}). Save the one you are on too, so a failed switch can come back. Passwords stay in your login keychain."
+        alert.accessoryView = accessory
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Forget")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        guard let ssid = popup.selectedItem?.representedObject as? String else { return }
+        switch response {
+        case .alertFirstButtonReturn where !field.stringValue.isEmpty:
+            if !WifiPasswords.save(ssid: ssid, password: field.stringValue) { notify("Couldn\u{2019}t save the password for \(ssid).") }
+        case .alertThirdButtonReturn:
+            WifiPasswords.remove(ssid: ssid)
+        default:
+            break
+        }
+        renderDashboardUI()
+    }
+
+    func dashboardSleeplessSnapshot() -> SleeplessSnapshot {
+        SleeplessSnapshot(on: isOn, floorPercent: batteryFloorPercent,
+                          lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                          autoOffAt: isOn ? timerEndDate : nil)
+    }
+
+    func dashboardTurnOff() { turnOffFromOutside() }
+
     // MARK: - Repo picker (page 2)
     @objc private func cancelRepoPick() { showPicker(false) }
 
@@ -1320,6 +1461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         updateCountdownLabel()
         syncRemoteControl()
         renderRemoteControlUI()
+        syncDashboard()
     }
 
     // Update text labels only (no pmset subprocess; safe to call on every slider tick).
@@ -1469,6 +1611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
 
     func applicationWillTerminate(_ notification: Notification) {
         rcServers.values.forEach { $0.stop() }   // never leave an orphaned remote-control server behind
+        dashboard.sync(shouldRun: false)
     }
 }
 

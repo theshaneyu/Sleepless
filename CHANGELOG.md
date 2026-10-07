@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phone dashboard.** A new switch in the popover, off by default. While Sleepless keeps the
+  Mac awake it serves one page to your phone over Tailscale: battery level and time left, the
+  Wi-Fi network the Mac is on, Sleepless state and its auto-off countdown, and a way to turn
+  Sleepless off. The page is in Traditional Chinese, follows the phone's light or dark mode,
+  and can be added to the Home Screen. Confirmations open as bottom sheets you can swipe down
+  to dismiss. The server listens on `127.0.0.1:47800` only. `tailscale serve --bg 47800`
+  (run once) publishes it inside your tailnet over HTTPS, and every request must come through
+  serve and carry the Mac owner's Tailscale login.
+- **Switch the Mac's Wi-Fi from the phone.** Save a network's password under **Wi-Fi
+  passwords…** and the dashboard can move the Mac onto it. macOS doesn't let apps use the
+  passwords it already saved, so Sleepless keeps its own copy in your login keychain. Every
+  switch needs a way back: the network the Mac is on must be saved too. If the new network
+  doesn't reach the internet within 45 seconds (a wrong password or a captive portal), the Mac
+  rejoins the previous one, because the phone usually reached it through that network.
+- Sleepless asks for Location Services access when the dashboard first starts. macOS only
+  reveals Wi-Fi network names to apps that have it.
 - **Several Remote Control servers at once.** The Claude Remote Control card now holds a list
   of up to five repositories, each with its own `claude remote-control` server. **Add
   repository** opens the searchable picker (repos already in the list are left out), and the
@@ -26,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. CI runs them on every push.
 
 ### Changed
+- `build.sh` signs with your "Apple Development" certificate when the keychain has one, and falls
+  back to ad-hoc signing. Location access and keychain items are tied to the signature, so an
+  ad-hoc rebuild would lose them every time. `SIGN_IDENTITY=-` forces ad-hoc.
 - A failure that retrying can't fix now stops only that repo's server and turns its light
   red. The switch and the other servers stay on; turning the switch off and on retries it.
   Previously any such failure turned the whole switch off.
