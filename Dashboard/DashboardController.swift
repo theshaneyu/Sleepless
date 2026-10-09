@@ -37,6 +37,9 @@ private func readTailscaleSelf() -> Result<TailscaleSelf, DashboardProblem> {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
     process.arguments = ["status", "--json"]
+    var environment = ProcessInfo.processInfo.environment
+    environment["TAILSCALE_BE_CLI"] = "1"
+    process.environment = environment
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
