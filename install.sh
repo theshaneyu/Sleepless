@@ -25,6 +25,7 @@ echo "       $USER_NAME ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /
 echo ""
 echo "     That is the only thing it permits — turn lid-close sleep on or off. Nothing else."
 echo "  3. Add a login item (~/Library/LaunchAgents/$BUNDLE_ID.plist) so it starts at login."
+echo "  4. Install the sleepless CLI in ~/.local/bin."
 echo ""
 read -r -p "Continue? [y/N] " reply
 case "$reply" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
@@ -55,6 +56,8 @@ cat > "$LAUNCH_AGENT" <<PLIST
 PLIST
 launchctl bootout "gui/$(id -u)/$BUNDLE_ID" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
+
+"$REPO/install-cli.sh" "$APP"
 
 # Launch now.
 open "$APP"

@@ -57,6 +57,27 @@ brew install --cask aboudjem/tap/sleepless
 
 あとはメニューバーのカップをクリックし、スイッチを入れて、フタを閉じるだけです。
 
+## コマンドライン
+
+短いコマンドを一度インストールします（`install.sh` でもインストールされます）：
+
+```sh
+/Applications/Sleepless.app/Contents/Resources/install-cli.sh
+```
+
+`~/.local/bin/sleepless` が作成されます。必要に応じて `~/.local/bin` をシェルの `PATH` に追加してください。
+
+```sh
+sleepless on
+sleepless off
+sleepless toggle
+sleepless status
+```
+
+必要ならアプリを起動し、実行中の Sleepless にメインスイッチの操作を依頼します。メニュー UI、バッテリー保護、タイマー、Remote Control、スマートフォンの Dashboard がすぐに同期します。`on` と `off` の繰り返しは状態を変えず、`on` は現在のカウントダウンを維持します。`toggle` は常に切り替えます。オフからオンにすると、アプリで選択したタイマーが開始されます。タイマー設定はアプリ終了時にリセットされます。
+
+結果は JSON の `on`、`autoOffMinutes`、任意の ISO-8601 `autoOffAt`、失敗時の `error` です。終了コードは成功 `0`、操作・通信失敗 `1`、引数エラー `64` です。エージェントの再試行には `on` または `off` を使い、通信失敗後は `status` を確認してから `toggle` を再試行してください。権限が未設定の場合、オン操作でメニューと同じ設定ダイアログが開きます。
+
 ## 機能
 
 | | | |

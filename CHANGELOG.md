@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Local CLI for the main switch.** `sleepless on`, `off`, `toggle` and `status` ask the
+  running app to act and return JSON with the actual state and an exit code. Commands start
+  the app if needed. UI, battery protection, timer, Remote Control and phone dashboard share
+  the existing switch flow. Repeating `on` preserves an active countdown. `install.sh` adds
+  the short command to `~/.local/bin`; existing installs can run the bundled `install-cli.sh`.
 - **Phone dashboard.** A new switch in the popover, off by default. While Sleepless keeps the
   Mac awake it serves one page to your phone over Tailscale: battery level and time left, the
   Wi-Fi network the Mac is on, Sleepless state and its auto-off countdown, and a way to turn

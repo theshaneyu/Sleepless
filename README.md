@@ -57,6 +57,41 @@ brew install --cask aboudjem/tap/sleepless
 
 Then click the cup in the menu bar, flip the switch, and close the lid.
 
+## Command line
+
+Install the short command once (`install.sh` also does this):
+
+```sh
+/Applications/Sleepless.app/Contents/Resources/install-cli.sh
+```
+
+It creates `~/.local/bin/sleepless`. Add `~/.local/bin` to your shell's `PATH` if needed.
+
+```sh
+sleepless on
+sleepless off
+sleepless toggle
+sleepless status
+```
+
+The command starts the app if needed and asks the running app to handle the main switch.
+The menu UI, battery protection, timer, Remote Control and phone dashboard follow immediately.
+`on` and `off` are idempotent: repeating `on` keeps the current auto-off deadline. `toggle`
+always flips the state. An off-to-on transition starts the timer selected in the app, just
+like the menu switch. Timer selection is in memory and resets when the app quits.
+
+Each command returns JSON with `on`, `autoOffMinutes`, an optional ISO-8601 `autoOffAt`, and
+an `error` when the operation fails. Exit codes are `0` for success, `1` for an operation or
+communication failure, and `64` for invalid arguments. Agents should use `on` or `off` when
+retrying; after a communication failure, check `status` before retrying `toggle`. If the
+passwordless grant is missing, turning on opens the same setup dialog as the menu switch.
+
+Without the short command, use the bundled executable directly:
+
+```sh
+/Applications/Sleepless.app/Contents/MacOS/Sleepless status
+```
+
 ## Features
 
 | | | |

@@ -59,6 +59,27 @@ brew install --cask aboudjem/tap/sleepless
 
 然后点击菜单栏里的咖啡杯，拨动开关，合上盖子。
 
+## 命令行
+
+安装一次短命令（`install.sh` 也会自动安装）：
+
+```sh
+/Applications/Sleepless.app/Contents/Resources/install-cli.sh
+```
+
+它会创建 `~/.local/bin/sleepless`。如果该目录不在 `PATH` 中，请加入 shell 配置。
+
+```sh
+sleepless on
+sleepless off
+sleepless toggle
+sleepless status
+```
+
+命令会在需要时启动 App，由正在运行的 Sleepless 操作主开关，立即同步菜单 UI、电量保护、定时器、Remote Control 和手机 Dashboard。重复执行 `on` 或 `off` 不会重复操作；`on` 会保留当前倒计时，`toggle` 则始终切换状态。从关闭切换到开启时，会启动 App 当前选定的定时器；退出 App 后定时器设置会重置。
+
+结果为 JSON：`on`、`autoOffMinutes`、可选的 ISO-8601 `autoOffAt`，失败时包含 `error`。退出码：成功 `0`，操作或通信失败 `1`，参数错误 `64`。Agents 重试应使用 `on` 或 `off`；通信失败后，先查询 `status` 再重试 `toggle`。如果缺少免密码授权，开启时会出现与菜单开关相同的设置对话框。
+
 ## 功能特性
 
 | | | |

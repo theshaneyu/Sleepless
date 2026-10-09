@@ -75,6 +75,13 @@ It understands exactly one command, `sleepless://off`, which restores normal sle
 can keep the Mac awake (pinned by `Tests/SleeplessCoreTests/URLCommandTests.swift`), so the
 worst a hostile link can do is let your Mac sleep.
 
+The `sleepless on|off|toggle|status` CLI talks to the running app over a `CFMessagePort` in
+the local login session, with a service name scoped by user ID. The app handles commands
+on its main run loop through the same switch path as the menu UI, reads the system state
+back and replies with the result. No HTTP endpoint, new daemon or wider sudo grant is added.
+The existing URL scheme still only turns off. Local processes acting as the user can
+request either switch direction, just as they can already use the scoped sudo grant.
+
 If that trade is not acceptable to you, build from source and **don't** run `install.sh`;
 you can toggle `sudo pmset -a disablesleep 1/0` manually instead and skip the grant.
 

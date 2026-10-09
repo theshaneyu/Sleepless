@@ -57,6 +57,27 @@ brew install --cask aboudjem/tap/sleepless
 
 Klicke dann auf die Tasse in der Menüleiste, lege den Schalter um und schließe den Deckel.
 
+## Kommandozeile
+
+Installiere den kurzen Befehl einmal (`install.sh` erledigt das ebenfalls):
+
+```sh
+/Applications/Sleepless.app/Contents/Resources/install-cli.sh
+```
+
+Dies erstellt `~/.local/bin/sleepless`. Ergänze bei Bedarf `~/.local/bin` im `PATH` deiner Shell.
+
+```sh
+sleepless on
+sleepless off
+sleepless toggle
+sleepless status
+```
+
+Der Befehl startet die App bei Bedarf und lässt die laufende App den Hauptschalter bedienen. Menü, Akkuschutz, Timer, Remote Control und Telefon-Dashboard werden sofort synchronisiert. Wiederholtes `on` oder `off` ändert nichts; `on` behält den laufenden Countdown bei. `toggle` wechselt immer den Zustand. Beim Einschalten startet der in der App ausgewählte Timer. Die Timer-Auswahl wird beim Beenden zurückgesetzt.
+
+Die JSON-Antwort enthält `on`, `autoOffMinutes`, optional `autoOffAt` im ISO-8601-Format und bei Fehlern `error`. Exit-Codes: Erfolg `0`, Bedienungs- oder Kommunikationsfehler `1`, ungültige Argumente `64`. Agents sollten mit `on` oder `off` wiederholen und nach einem Kommunikationsfehler vor einem erneuten `toggle` zuerst `status` prüfen. Fehlt die Berechtigung, öffnet das Einschalten denselben Einrichtungsdialog wie der Menüschalter.
+
 ## Funktionen
 
 | | | |

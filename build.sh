@@ -55,10 +55,10 @@ fi
 [ -f "$ICNS" ] || { echo "error: missing $ICNS (run ./build.sh --regen-icon)" >&2; exit 1; }
 
 # 2. Compile the executable.
-echo "==> Compiling App.swift + Core/ + Dashboard/"
+echo "==> Compiling App.swift + Core/ + Control/ + Dashboard/"
 BIN_TMP="$(mktemp -d)"
 swiftc -O -parse-as-library -target "$TARGET" -framework AppKit -framework ServiceManagement \
-  "$REPO/App.swift" "$REPO"/Core/*.swift "$REPO"/Dashboard/*.swift -o "$BIN_TMP/$APP_NAME"
+  "$REPO/App.swift" "$REPO"/Core/*.swift "$REPO"/Control/*.swift "$REPO"/Dashboard/*.swift -o "$BIN_TMP/$APP_NAME"
 
 # 3. Assemble the bundle: Contents/{Info.plist, MacOS/<exe>, Resources/<name>.icns}
 echo "==> Assembling bundle"
@@ -70,8 +70,8 @@ cp "$ICNS" "$CONTENTS/Resources/$APP_NAME.icns"
 chmod +x "$CONTENTS/MacOS/$APP_NAME"
 # Ship the grant + uninstall scripts inside the bundle so Homebrew-cask users (who get
 # only the .app) can run the one-time passwordless grant and a clean uninstall.
-cp "$REPO/grant.sh" "$REPO/uninstall.sh" "$CONTENTS/Resources/"
-chmod +x "$CONTENTS/Resources/grant.sh" "$CONTENTS/Resources/uninstall.sh"
+cp "$REPO/grant.sh" "$REPO/uninstall.sh" "$REPO/install-cli.sh" "$CONTENTS/Resources/"
+chmod +x "$CONTENTS/Resources/grant.sh" "$CONTENTS/Resources/uninstall.sh" "$CONTENTS/Resources/install-cli.sh"
 rm -rf "$BIN_TMP"
 
 # 4. Sign. macOS ties Location Services access and keychain items to the signature, so an

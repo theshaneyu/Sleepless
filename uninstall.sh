@@ -22,6 +22,11 @@ osascript -e "quit app \"$APP_NAME\"" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/$BUNDLE_ID" 2>/dev/null || true
 rm -f "$LAUNCH_AGENT"
 
+CLI="${SLEEPLESS_CLI_DIR:-$HOME/.local/bin}/sleepless"
+if [ -L "$CLI" ] && [ "$(readlink "$CLI")" = "$APP/Contents/MacOS/$APP_NAME" ]; then
+  rm "$CLI"
+fi
+
 # 3. Remove the app.
 echo "==> Removing $APP"
 rm -rf "$APP"

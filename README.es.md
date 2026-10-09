@@ -57,6 +57,27 @@ brew install --cask aboudjem/tap/sleepless
 
 Luego haz clic en la taza de la barra de menús, activa el interruptor y cierra la tapa.
 
+## Línea de comandos
+
+Instala el comando corto una vez (`install.sh` también lo instala):
+
+```sh
+/Applications/Sleepless.app/Contents/Resources/install-cli.sh
+```
+
+Se crea `~/.local/bin/sleepless`. Añade `~/.local/bin` al `PATH` de tu shell si es necesario.
+
+```sh
+sleepless on
+sleepless off
+sleepless toggle
+sleepless status
+```
+
+El comando inicia la app si hace falta y pide a la app en ejecución que opere el interruptor principal. La interfaz, la protección de batería, el temporizador, Remote Control y el Dashboard del teléfono se sincronizan inmediatamente. Repetir `on` u `off` no repite la operación; `on` conserva la cuenta atrás actual. `toggle` siempre cambia el estado. Al pasar de apagado a encendido, empieza el temporizador seleccionado en la app. La selección se reinicia al cerrar la app.
+
+La respuesta JSON contiene `on`, `autoOffMinutes`, opcionalmente `autoOffAt` en ISO-8601 y `error` si falla. Códigos de salida: éxito `0`, fallo de operación o comunicación `1`, argumentos inválidos `64`. Los agentes deben reintentar con `on` u `off`; tras un fallo de comunicación, consultar `status` antes de repetir `toggle`. Si falta el permiso, al encender se abre el mismo diálogo de configuración que con el interruptor del menú.
+
 ## Características
 
 | | | |

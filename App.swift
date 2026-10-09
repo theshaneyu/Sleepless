@@ -39,7 +39,7 @@
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \
-//          -framework ServiceManagement App.swift Core/*.swift Dashboard/*.swift
+//          -framework ServiceManagement App.swift Core/*.swift Control/*.swift Dashboard/*.swift
 //   File MUST be named App.swift and compiled -parse-as-library so the
 //   @main enum + @MainActor static main() entry is Swift-6 isolation-safe.
 //   Core/ holds the AppKit-free logic that `swift test` covers.
@@ -594,6 +594,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var keepAwakeTimer: Timer?       // one-shot: flips sleep back on when it fires
     private var countdownTicker: Timer?      // 1 Hz label refresh, only while the popover is open
     private var timerEndDate: Date?
+    private lazy var localControl = LocalControlServer { [weak self] command in
+        guard let self else {
+            return ControlReply(on: false, autoOffMinutes: 0, autoOffAt: nil, error: "Sleepless is shutting down.")
+        }
+        return self.handleControlCommand(command)
+    }
 
     // Claude Remote Control (Feature 3)
     private var rcSwitch: NSSwitch!
@@ -653,6 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         refresh()   // reflect TRUE system state on launch (never a stale assumption)
         timer = Timer.scheduledTimer(timeInterval: pollInterval, target: self,
                                      selector: #selector(poll), userInfo: nil, repeats: true)
+        if !localControl.start() { NSLog("Sleepless: couldn't start the local CLI interface") }
     }
 
     // MARK: - Popover content (native NSSwitch toggle, macOS-aligned)
@@ -975,20 +982,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     }
 
     @objc private func switchToggled(_ sender: NSSwitch) {
-        if performToggle(wantOn: sender.state == .on) {
-            sender.state = .off   // setup needed / failed: reflect reality (performToggle notified)
-        }
+        performToggle(wantOn: sender.state == .on)
     }
 
-    // Core keep-awake toggle, decoupled from the UI sender. Returns true ONLY when the user
-    // must act (the passwordless grant is missing and setup did not complete) so the caller can
-    // reflect OFF. The decision to prompt is made on the REAL sudo result (see setDisableSleep),
-    // never by re-reading SleepDisabled: a successful sudo means the command ran, even if a
-    // safety net (the battery floor) legitimately turns sleep back on afterwards —
-    // which must NOT be mistaken for "permission missing" and trigger a password prompt. This
-    // unobservable, state-proxy decision is what made earlier releases re-prompt spuriously.
+    // UI and CLI share this path; only a missing sudo grant opens the setup prompt.
     @discardableResult
-    private func performToggle(wantOn: Bool) -> Bool {
+    private func performToggle(wantOn: Bool) -> ToggleResult {
         var result = setDisableSleep(wantOn)
         // Only a genuinely MISSING grant warrants the one-time native-auth setup. A successful
         // sudo (.ok) — or any other failure — never re-prompts here.
@@ -996,12 +995,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
             if installGrantViaAuth() { result = setDisableSleep(true) }
             if result != .ok {
                 notify("Couldn't keep awake. The permission isn't set up yet.")
-                return true
             }
         }
         refresh()                              // applies UI + battery floor; switch reflects reality
-        if isOn, autoOffMinutes > 0 { startKeepAwakeTimer(minutes: autoOffMinutes) }
-        return false
+        if result == .ok, isOn, autoOffMinutes > 0 { startKeepAwakeTimer(minutes: autoOffMinutes) }
+        return result
+    }
+
+    private func handleControlCommand(_ command: ControlCommand) -> ControlReply {
+        refresh()
+        var error: String?
+        if let wantOn = command.stateChange(current: isOn) {
+            switch performToggle(wantOn: wantOn) {
+            case .ok:
+                if isOn != wantOn {
+                    error = wantOn ? "Sleepless couldn't stay on. Check the battery floor and system state."
+                                   : "The system didn't turn Sleepless off."
+                }
+            case .grantMissing:
+                error = "Sleepless's permission isn't set up. Enable it from the menu bar first."
+            case .failed(let reason):
+                error = "Couldn't change Sleepless: \(reason)"
+            }
+        }
+        return ControlReply(on: isOn, autoOffMinutes: autoOffMinutes, autoOffAt: timerEndDate, error: error)
     }
 
     // `open -g sleepless://off` — how scripts and agents flip the main switch off (see
@@ -1599,6 +1616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     @objc private func quit() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
+        localControl.stop()
         rcServers.values.forEach { $0.stop() }   // never leave an orphaned remote-control server behind
         dashboard.sync(shouldRun: false)
     }
@@ -1608,6 +1626,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 enum SleeplessApp {
     @MainActor
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-psn_") }
+        let executableName = URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+        if !arguments.isEmpty || executableName == "sleepless" {
+            exit(SleeplessCLI.run(arguments: arguments))
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
