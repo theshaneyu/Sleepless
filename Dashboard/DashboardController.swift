@@ -154,8 +154,12 @@ final class DashboardController {
             respond(HTTPResponse(status: 200, contentType: "text/html; charset=utf-8", body: Data(dashboardPage.utf8)))
         case ("GET", "/manifest.webmanifest"):
             respond(HTTPResponse(status: 200, contentType: "application/manifest+json", body: Data(dashboardManifest.utf8)))
-        case ("GET", "/icon.png"):
-            respond(HTTPResponse(status: 200, contentType: "image/png", body: appIconPNG))
+        case ("GET", "/icon.png"), ("GET", "/apple-touch-icon.png"):
+            guard let touchIconPNG else { return respond(.text(404, "Icon not found")) }
+            respond(HTTPResponse(status: 200, contentType: "image/png", body: touchIconPNG))
+        case ("GET", "/icon-maskable.png"):
+            guard let maskableIconPNG else { return respond(.text(404, "Icon not found")) }
+            respond(HTTPResponse(status: 200, contentType: "image/png", body: maskableIconPNG))
         case ("GET", "/api/status"):
             respond(json(200, status()))
         case ("GET", "/api/wifi/networks"):
@@ -224,7 +228,13 @@ final class DashboardController {
                            locationAuthorized: wifi.locationAuthorized, lastSwitch: wifi.switchState))
     }
 
-    private lazy var appIconPNG = pngData(of: NSApp.applicationIconImage, side: 180)
+    private lazy var touchIconPNG = bundledIconPNG(named: "apple-touch-icon")
+    private lazy var maskableIconPNG = bundledIconPNG(named: "icon-maskable")
+
+    private func bundledIconPNG(named name: String) -> Data? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png") else { return nil }
+        return try? Data(contentsOf: url)
+    }
 }
 
 private let appIconPathPrefix = "/api/apps/icon/"

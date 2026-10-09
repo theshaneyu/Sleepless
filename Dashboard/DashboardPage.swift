@@ -5,7 +5,7 @@
 
 let dashboardManifest = #"""
 {"name":"Sleepless","short_name":"Sleepless","lang":"zh-Hant-TW","start_url":"/","display":"standalone",
- "background_color":"#0a0a0c","theme_color":"#0a0a0c","icons":[{"src":"/icon.png","sizes":"180x180","type":"image/png"}]}
+ "background_color":"#0a0a0c","theme_color":"#0a0a0c","icons":[{"src":"/icon-maskable.png","sizes":"1024x1024","type":"image/png","purpose":"any maskable"}]}
 """#
 
 let dashboardPage = #"""
@@ -20,7 +20,8 @@ let dashboardPage = #"""
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0a0a0c" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" type="image/png" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <title>Sleepless</title>
 <style>
   :root {

@@ -50,6 +50,7 @@ if [ "$REGEN_ICON" = "1" ]; then
   swiftc -O -framework AppKit "$REPO/make-icon.swift" -o "$TMP_ICON/mkicon"
   "$TMP_ICON/mkicon" "$TMP_ICON"
   iconutil -c icns "$TMP_ICON/$APP_NAME.iconset" -o "$REPO/assets/$APP_NAME.icns"
+  cp "$TMP_ICON/apple-touch-icon.png" "$TMP_ICON/icon-maskable.png" "$REPO/docs/"
   rm -rf "$TMP_ICON"
 fi
 [ -f "$ICNS" ] || { echo "error: missing $ICNS (run ./build.sh --regen-icon)" >&2; exit 1; }
@@ -67,6 +68,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$REPO/Info.plist" "$CONTENTS/Info.plist"
 cp "$BIN_TMP/$APP_NAME" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ICNS" "$CONTENTS/Resources/$APP_NAME.icns"
+cp "$REPO/docs/apple-touch-icon.png" "$REPO/docs/icon-maskable.png" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME"
 # Ship the grant + uninstall scripts inside the bundle so Homebrew-cask users (who get
 # only the .app) can run the one-time passwordless grant and a clean uninstall.

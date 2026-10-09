@@ -45,7 +45,7 @@ func squirclePath(rect: CGRect, n: CGFloat = 5.0) -> CGPath {
     return p
 }
 
-func renderIcon(_ S: CGFloat) -> NSBitmapImageRep {
+func renderIcon(_ S: CGFloat, fullBleed: Bool = false) -> NSBitmapImageRep {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(S), pixelsHigh: Int(S),
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)!
@@ -54,10 +54,10 @@ func renderIcon(_ S: CGFloat) -> NSBitmapImageRep {
     NSGraphicsContext.current = ctx
     let cg = ctx.cgContext
 
-    // Apple plate grid: ~824 plate on 1024 canvas (≈100px gutter), scaled to S.
-    let gutter = S * (100.0 / 1024.0)
+    // macOS uses the Apple plate grid; web icons let the browser apply its mask.
+    let gutter = fullBleed ? 0 : S * (100.0 / 1024.0)
     let plate = CGRect(x: gutter, y: gutter, width: S - 2 * gutter, height: S - 2 * gutter)
-    let path = squirclePath(rect: plate)
+    let path = fullBleed ? CGPath(rect: plate, transform: nil) : squirclePath(rect: plate)
 
     // Plate fill: indigo -> violet -> fuchsia diagonal gradient (lighter top-left,
     // deeper bottom-right) so it agrees with the system icon lighting.
@@ -183,4 +183,6 @@ let specs: [(String, CGFloat)] = [
 ]
 for (name, px) in specs { write(renderIcon(px), "\(iconset)/\(name).png") }
 write(renderIcon(1024), "\(outDir)/Sleepless-1024.png")
-print("rendered iconset (\(specs.count) sizes) + Sleepless-1024.png")
+write(renderIcon(180, fullBleed: true), "\(outDir)/apple-touch-icon.png")
+write(renderIcon(1024, fullBleed: true), "\(outDir)/icon-maskable.png")
+print("rendered iconset (\(specs.count) sizes), Sleepless-1024.png and full-bleed web icons")
