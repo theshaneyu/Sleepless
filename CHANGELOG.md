@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Rejoin Wi-Fi when it drops.** A new switch in the popover, on by default. While Sleepless
+  keeps the Mac awake and the Mac has been on no Wi-Fi network for 30 seconds, Sleepless joins
+  one saved under **Wi-Fi passwords…**, the network it just lost first and then the strongest
+  other one in range. It keeps trying every 15 seconds for the first 10 minutes and every
+  minute after that, without giving up, so an iPhone hotspot is joined while you hold its
+  Settings screen open (the only time it broadcasts), however late you open it. It also covers
+  an access point that reboots overnight: macOS fails a few joins while it is down, deny-lists
+  the network for auto-join, and leaves the Mac offline until someone joins it by hand. Wi-Fi turned
+  off stays off, and a network that is joined but has no internet is left to macOS. The popover
+  and the phone dashboard show when it last rejoined. **Wi-Fi passwords…** moved from the
+  dashboard card to this one, since both features use the same saved passwords.
 - **Local CLI for the main switch.** `sleepless on`, `off`, `toggle` and `status` ask the
   running app to act and return JSON with the actual state and an exit code. Commands start
   the app if needed. UI, battery protection, timer, Remote Control and phone dashboard share

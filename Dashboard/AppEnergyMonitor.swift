@@ -5,6 +5,7 @@
 import AppKit
 import Darwin
 import Foundation
+import os
 
 private let quitGrace: TimeInterval = 10        // an app still running after this likely waits on a save dialog
 private let forceQuitGrace: TimeInterval = 5
@@ -147,7 +148,7 @@ final class AppEnergyMonitor {
             _ = force ? app.forceTerminate() : app.terminate()
         }
         quits[id] = (Date(), force)
-        NSLog("Sleepless: %@ %@ from the phone dashboard", force ? "force-quit" : "quit", id)
+        Log.dashboard.notice("\(force ? "Force-quit" : "Quit", privacy: .public) \(id, privacy: .public) from the phone dashboard")
         return nil
     }
 

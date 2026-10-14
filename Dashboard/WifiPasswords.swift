@@ -1,9 +1,10 @@
-// WifiPasswords.swift. Wi-Fi passwords the phone dashboard may switch with. CoreWLAN can't use
-// the passwords macOS already saved (associating without one fails with kCWInvalidParameterErr),
-// so Sleepless keeps its own copy, one login-keychain item per network, for the networks you
-// choose. Items are tied to Sleepless's signature, so reading them never prompts as long as the
-// app is signed by the same certificate (see build.sh). Reads still happen off the main thread:
-// if a re-signed build does trigger a keychain prompt, only that switch waits on it.
+// WifiPasswords.swift. Wi-Fi passwords the phone dashboard may switch with and WifiRejoin may
+// rejoin with. CoreWLAN can't use the passwords macOS already saved (associating without one
+// fails with kCWInvalidParameterErr), so Sleepless keeps its own copy, one login-keychain item
+// per network, for the networks you choose. Items are tied to Sleepless's signature, so reading
+// them never prompts as long as the app is signed by the same certificate (see build.sh). Reads
+// still happen off the main thread: if a re-signed build does trigger a keychain prompt, only
+// that switch or rejoin waits on it.
 import Foundation
 import Security
 

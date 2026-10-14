@@ -20,7 +20,7 @@
 // FULL cup means it is being kept awake (caffeinated), and a full cup with a small
 // dot means it is awake on battery with the auto-off safety net live.
 //
-// Four small, fail-safe features layer on top, none of which adds a daemon or
+// Five small, fail-safe features layer on top, none of which adds a daemon or
 // persists OS state (so "reboot resets it" still holds):
 //   1. Auto-off timer (1h / 2h) — a one-shot in-memory Timer that flips sleep back
 //      on when it fires. Dies on quit; nothing survives a reboot.
@@ -36,6 +36,10 @@
 //      shows battery, Wi-Fi and Sleepless state to your phone through `tailscale serve`, can
 //      move the Mac to another Wi-Fi network you saved a password for, and can quit apps that
 //      draw too much power (Dashboard/).
+//   5. Wi-Fi rejoin — ON by default. While the Mac is kept awake and has been off every Wi-Fi
+//      network for 30 seconds, Sleepless keeps trying to join one you saved a password for:
+//      macOS can deny-list a network that failed while its access point rebooted, and it won't
+//      join the iPhone hotspot on its own (Dashboard/WifiRejoin.swift).
 //
 // Build (mirrors Nexus.app): Command Line Tools `swiftc`, NO Xcode project.
 //   swiftc -O -parse-as-library -target arm64-apple-macos26.0 -framework AppKit \
@@ -44,7 +48,19 @@
 //   @main enum + @MainActor static main() entry is Swift-6 isolation-safe.
 //   Core/ holds the AppKit-free logic that `swift test` covers.
 import AppKit
+import os
 import ServiceManagement
+
+// Unified logging rather than NSLog, whose arguments `log show` prints as <private>. logd keeps
+// these within its own size and age limits, so they never pile up on disk. To read them:
+//   log show --last 1h --predicate 'subsystem == "com.aboudjem.Sleepless"'
+enum Log {
+    private static let subsystem = "com.aboudjem.Sleepless"
+    static let app = Logger(subsystem: subsystem, category: "app")
+    static let remoteControl = Logger(subsystem: subsystem, category: "remote-control")
+    static let wifi = Logger(subsystem: subsystem, category: "wifi")
+    static let dashboard = Logger(subsystem: subsystem, category: "dashboard")
+}
 
 // MARK: - Tunables
 private let pollInterval: TimeInterval = 60
@@ -63,6 +79,7 @@ private let rcEnabledKey = "remoteControlEnabled"
 private let rcReposKey = "remoteControlRepos"
 private let rcLegacyRepoKey = "remoteControlRepo"   // the single repo of 1.3.x, migrated on launch
 private let dashboardEnabledKey = "phoneDashboardEnabled"
+private let wifiRejoinEnabledKey = "wifiRejoinEnabled"
 let autoOffChoices = [0, 60, 120]   // minutes, in the order of the popover's Off | 1h | 2h segments
 private let rcProjectsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects")
 // Supervisor backoff. `claude remote-control` exits on its own after roughly 10 minutes
@@ -454,7 +471,7 @@ private final class RemoteControlServer: NSObject {
         }
         do { try process.run() }
         catch {
-            NSLog("Sleepless: failed to launch claude remote-control in %@: %@", repo, error.localizedDescription)
+            Log.remoteControl.error("Failed to launch claude remote-control in \(self.repo, privacy: .public): \(error.localizedDescription, privacy: .public)")
             fail("Couldn\u{2019}t start claude remote-control.")
             return
         }
@@ -505,7 +522,7 @@ private final class RemoteControlServer: NSObject {
         connected = false
         log?.flush()                         // fatalReason() reads the file, so finish writing it first
         log = nil
-        NSLog("Sleepless: claude remote-control in %@ exited (status %d) after %.0fs", repo, status, uptime)
+        Log.remoteControl.notice("claude remote-control in \(self.repo, privacy: .public) exited (status \(status)) after \(uptime, format: .fixed(precision: 0))s")
         // Only a run that died young can be a setup failure. A long run's log also holds the
         // session titles, and one that happens to say "not trusted" must not stop the server.
         if uptime < rcHealthyUptime, let reason = fatalReason() {
@@ -610,6 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var rcStatusLabel: NSTextField!
     private var loginCard: CardView!        // follows the Remote Control card as its list grows
     private var dashboardCard: CardView!    // also follows it, between it and the login card
+    private var wifiCard: CardView!         // and so does this one, after the dashboard card
     private var quitButton: NSButton!
     private var rcConfig = RemoteControlConfig(enabled: true, repos: [])
     private var rcServers: [String: RemoteControlServer] = [:]
@@ -619,6 +637,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private var dashboardEnabled = false
     private var dashboardSwitch: NSSwitch!
     private var dashboardStatusLabel: NSTextField!
+
+    // Wi-Fi rejoin (Feature 5)
+    private var wifiRejoinEnabled = true
+    private var wifiRejoinSwitch: NSSwitch!
+    private var wifiRejoinStatusLabel: NSTextField!
     private var wifiPasswordsCountLabel: NSTextField!
 
     // Searchable repo picker (second page of the popover)
@@ -643,7 +666,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
                          legacyRepo: defaults.string(forKey: rcLegacyRepoKey))
         dashboardEnabled = defaults.bool(forKey: dashboardEnabledKey)
         dashboard.host = self
-        dashboard.onChange = { [weak self] in self?.renderDashboardUI() }
+        dashboard.onChange = { [weak self] in self?.renderDashboardUI(); self?.renderWifiRejoinUI() }
+        wifiRejoinEnabled = defaults.object(forKey: wifiRejoinEnabledKey) as? Bool ?? true
+        dashboard.rejoin.onChange = { [weak self] in self?.renderWifiRejoinUI() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = offGlyph
@@ -659,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         refresh()   // reflect TRUE system state on launch (never a stale assumption)
         timer = Timer.scheduledTimer(timeInterval: pollInterval, target: self,
                                      selector: #selector(poll), userInfo: nil, repeats: true)
-        if !localControl.start() { NSLog("Sleepless: couldn't start the local CLI interface") }
+        if !localControl.start() { Log.app.error("Couldn't start the local CLI interface") }
     }
 
     // MARK: - Popover content (native NSSwitch toggle, macOS-aligned)
@@ -818,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         g4.addSubview(rcStatusLabel)
 
         // GROUP 5 — phone dashboard (off by default). Placed by layoutRemoteControlCard().
-        let g5d = makeCard(NSRect(x: pad, y: 0, width: contentW, height: ci + 86 + ci))
+        let g5d = makeCard(NSRect(x: pad, y: 0, width: contentW, height: ci + 56 + ci))
         dashboardCard = g5d
         let dashboardLabel = makeLabel("Phone dashboard", font: .systemFont(ofSize: 13), color: .labelColor)
         dashboardLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
@@ -837,6 +862,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         dashboardStatusLabel.cell?.wraps = true
         dashboardStatusLabel.isSelectable = true   // the URL is worth copying
         g5d.addSubview(dashboardStatusLabel)
+
+        // GROUP 5b — Wi-Fi rejoin (on by default), with the saved passwords it and the dashboard
+        // share. Placed by layoutRemoteControlCard().
+        let g5w = makeCard(NSRect(x: pad, y: 0, width: contentW, height: ci + 86 + ci))
+        wifiCard = g5w
+        let wifiLabel = makeLabel("Rejoin Wi-Fi when it drops", font: .systemFont(ofSize: 13), color: .labelColor)
+        wifiLabel.frame = NSRect(x: ci, y: ci, width: cw - swW - 8, height: 22)
+        g5w.addSubview(wifiLabel)
+        wifiRejoinSwitch = NSSwitch()
+        wifiRejoinSwitch.target = self
+        wifiRejoinSwitch.action = #selector(wifiRejoinToggled(_:))
+        wifiRejoinSwitch.state = wifiRejoinEnabled ? .on : .off
+        wifiRejoinSwitch.frame = NSRect(x: contentW - ci - swW, y: ci + (22 - swH) / 2, width: swW, height: swH)
+        g5w.addSubview(wifiRejoinSwitch)
+        wifiRejoinStatusLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
+        wifiRejoinStatusLabel.frame = NSRect(x: ci, y: ci + 28, width: cw, height: 28)
+        wifiRejoinStatusLabel.usesSingleLineMode = false
+        wifiRejoinStatusLabel.lineBreakMode = .byWordWrapping
+        wifiRejoinStatusLabel.maximumNumberOfLines = 2
+        wifiRejoinStatusLabel.cell?.wraps = true
+        g5w.addSubview(wifiRejoinStatusLabel)
         let wifiButton = NSButton(title: "Wi-Fi passwords\u{2026}",
                                   image: NSImage(systemSymbolName: "wifi", accessibilityDescription: nil) ?? NSImage(),
                                   target: self, action: #selector(wifiPasswordsClicked))
@@ -846,11 +892,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         wifiButton.font = .systemFont(ofSize: 11)
         wifiButton.sizeToFit()
         wifiButton.frame = NSRect(x: ci, y: ci + 64, width: wifiButton.frame.width + 6, height: 20)
-        g5d.addSubview(wifiButton)
+        g5w.addSubview(wifiButton)
         wifiPasswordsCountLabel = makeLabel("", font: .systemFont(ofSize: 11), color: .tertiaryLabelColor)
         wifiPasswordsCountLabel.alignment = .right
         wifiPasswordsCountLabel.frame = NSRect(x: contentW - ci - 80, y: ci + 67, width: 80, height: 14)
-        g5d.addSubview(wifiPasswordsCountLabel)
+        g5w.addSubview(wifiPasswordsCountLabel)
 
         // GROUP 6 — launch at login (off by default; never auto-enables sleep prevention)
         let g5h: CGFloat = 46
@@ -930,14 +976,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     // Everything from the Remote Control list down moves with the number of repos in it.
     private func layoutRemoteControlCard() {
-        guard let rcCard, let dashboardCard, let loginCard, let quitButton else { return }
+        guard let rcCard, let dashboardCard, let wifiCard, let loginCard, let quitButton else { return }
         let addY = rcRowsTop + CGFloat(rcConfig.repos.count) * rcRowHeight
         rcAddButton.frame.origin.y = addY
         rcCountLabel.frame.origin.y = addY + 3
         rcStatusLabel.frame.origin.y = addY + 28
         rcCard.frame.size.height = rcStatusLabel.frame.maxY + 8
         dashboardCard.frame.origin.y = rcCard.frame.maxY + 12
-        loginCard.frame.origin.y = dashboardCard.frame.maxY + 12
+        wifiCard.frame.origin.y = dashboardCard.frame.maxY + 12
+        loginCard.frame.origin.y = wifiCard.frame.maxY + 12
         quitButton.frame.origin.y = loginCard.frame.maxY + 12
         popover.contentSize = NSSize(width: popoverWidth, height: quitButton.frame.maxY + 16)
     }
@@ -1156,7 +1203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
             if sender.state == .on { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
         } catch {
-            NSLog("Sleepless: login item update failed: %@", error.localizedDescription)
+            Log.app.error("Login item update failed: \(error.localizedDescription, privacy: .public)")
             notify("Couldn't update Launch at login.")
         }
         sender.state = loginItemEnabled() ? .on : .off
@@ -1298,11 +1345,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
     private func renderDashboardUI() {
         dashboardSwitch?.state = dashboardEnabled ? .on : .off
         dashboardStatusLabel?.stringValue = dashboardCaption()
+    }
+
+    // MARK: - Wi-Fi rejoin (Feature 5)
+    // Same lifecycle rule again: it watches the Wi-Fi only while the Mac is kept awake and its
+    // switch is on. WifiRejoinWatchdog does the watching; this is the popover side.
+    @objc private func wifiRejoinToggled(_ sender: NSSwitch) {
+        wifiRejoinEnabled = sender.state == .on
+        UserDefaults.standard.set(wifiRejoinEnabled, forKey: wifiRejoinEnabledKey)
+        syncWifiRejoin()
+    }
+
+    private func syncWifiRejoin() {
+        dashboard.rejoin.sync(shouldRun: isOn && wifiRejoinEnabled)
+        renderWifiRejoinUI()
+    }
+
+    private func wifiRejoinCaption(savedCount: Int) -> String {
+        guard wifiRejoinEnabled else { return "Off. If Wi-Fi drops, the Mac waits for macOS to rejoin." }
+        guard isOn else { return "Starts when you turn Sleepless on." }
+        guard dashboard.wifi.locationAuthorized else {
+            return "Allow Location Services for Sleepless so it can see Wi-Fi names."
+        }
+        guard savedCount > 0 else { return "Save a Wi-Fi password below so Sleepless can rejoin that network." }
+        let rejoin = dashboard.rejoin
+        if let droppedAt = rejoin.droppedAt { return "Wi-Fi dropped at \(shortTime(droppedAt)). Rejoining\u{2026}" }
+        if let last = rejoin.lastRejoin { return "Rejoined \(last.ssid) at \(shortTime(last.at))." }
+        return "Joins a saved network after 30 seconds without Wi-Fi."
+    }
+
+    private func shortTime(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func renderWifiRejoinUI() {
         let saved = WifiPasswords.savedSSIDs().count
+        wifiRejoinSwitch?.state = wifiRejoinEnabled ? .on : .off
+        wifiRejoinStatusLabel?.stringValue = wifiRejoinCaption(savedCount: saved)
         wifiPasswordsCountLabel?.stringValue = saved == 0 ? "None saved" : "\(saved) saved"
     }
 
-    // The phone can only switch to networks saved here, and only away from one saved here too.
+    // Sleepless rejoins only networks saved here, and the phone can only switch to networks saved
+    // here, and only away from one saved here too.
     @objc private func wifiPasswordsClicked() {
         let saved = WifiPasswords.savedSSIDs()
         let current = dashboard.wifi.currentSSID
@@ -1325,8 +1411,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         accessory.addSubview(field)
 
         let alert = NSAlert()
-        alert.messageText = "Wi-Fi passwords for the phone dashboard"
-        alert.informativeText = "The phone can move the Mac between networks saved here (\u{2713}). Save the one you are on too, so a failed switch can come back. Passwords stay in your login keychain."
+        alert.messageText = "Wi-Fi passwords"
+        alert.informativeText = "If Wi-Fi drops, Sleepless rejoins a network saved here (\u{2713}), and the phone dashboard can move the Mac between them. Save the one you are on too. Passwords stay in your login keychain."
         alert.accessoryView = accessory
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
@@ -1343,7 +1429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         default:
             break
         }
-        renderDashboardUI()
+        renderWifiRejoinUI()
     }
 
     func dashboardSleeplessSnapshot() -> SleeplessSnapshot {
@@ -1478,6 +1564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         syncRemoteControl()
         renderRemoteControlUI()
         syncDashboard()
+        syncWifiRejoin()
     }
 
     // Update text labels only (no pmset subprocess; safe to call on every slider tick).
@@ -1539,7 +1626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         process.standardInput = FileHandle.nullDevice
         do { try process.run() }
         catch {
-            NSLog("Sleepless: failed to launch sudo: %@", error.localizedDescription)
+            Log.app.error("Failed to launch sudo: \(error.localizedDescription, privacy: .public)")
             return (-1, "", "launch failed: \(error.localizedDescription)")
         }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
@@ -1607,7 +1694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
         process.standardOutput = pipe
         process.standardError = Pipe()
         do { try process.run() }
-        catch { NSLog("Sleepless: failed to launch %@: %@", launchPath, error.localizedDescription); return "" }
+        catch { Log.app.error("Failed to launch \(launchPath, privacy: .public): \(error.localizedDescription, privacy: .public)"); return "" }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(data: data, encoding: .utf8) ?? ""

@@ -1,4 +1,4 @@
-// WifiController.swift. Reads and switches the Mac's Wi-Fi for the phone dashboard.
+// WifiController.swift. Reads, switches and rejoins the Mac's Wi-Fi for the dashboard and WifiRejoin.
 //
 // macOS hides every network name (the current one and scan results) from apps without
 // Location Services access, so the dashboard asks for it once. Switching joins with a password
@@ -8,6 +8,7 @@
 import CoreLocation
 import CoreWLAN
 import Foundation
+import os
 
 private let switchDelay: TimeInterval = 1.5      // lets the 202 reach the phone before the link drops
 private let verifyTimeout: TimeInterval = 45
@@ -109,6 +110,7 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
         Task { @MainActor [weak self] in self?.onChange?() }
     }
 
+    var powerOn: Bool { WifiRadio.interface?.powerOn() == true }
     var currentSSID: String? { WifiRadio.interface?.ssid() }
     var currentRSSI: Int? { currentSSID == nil ? nil : WifiRadio.interface?.rssiValue() }
 
@@ -130,6 +132,26 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
                             rssi: signal[ssid], current: ssid == current)
             }.sorted { ($0.current ? 1 : 0, $0.rssi ?? Int.min) > ($1.current ? 1 : 0, $1.rssi ?? Int.min) }
             Task { @MainActor in completion(result) }
+        }
+    }
+
+    // Joins the first saved network in range (see wifiRejoinCandidates) and reports which one, or
+    // nil if none would take the Mac. Runs on the queue phone switches use, so the two never drive
+    // the radio at once.
+    func rejoin(previous: String?, completion: @escaping @MainActor (String?) -> Void) {
+        worker.async {
+            let joined = WifiRadio.interface?.ssid() == nil ? Self.joinFirstSaved(previous: previous) : nil   // nil: macOS got there first
+            Task { @MainActor in completion(joined) }
+        }
+    }
+
+    private nonisolated static func joinFirstSaved(previous: String?) -> String? {
+        let candidates = wifiRejoinCandidates(previous: previous, saved: WifiPasswords.savedSSIDs(),
+                                              signal: WifiRadio.signalBySSID())
+        return candidates.first { ssid in
+            guard let failure = WifiRadio.join(ssid, password: WifiPasswords.read(ssid: ssid)) else { return true }
+            Log.wifi.notice("Wi-Fi rejoin to \(ssid, privacy: .public) failed: \(failure, privacy: .public)")
+            return false
         }
     }
 
@@ -172,7 +194,7 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
                                                   report: @Sendable (WifiSwitchState.Phase, WifiSwitchState.Reason?) -> Void) {
         let reason: WifiSwitchState.Reason
         if let failure = WifiRadio.join(target, password: password) {
-            NSLog("Sleepless: Wi-Fi switch to %@ failed: %@", target, failure)
+            Log.wifi.notice("Wi-Fi switch to \(target, privacy: .public) failed: \(failure, privacy: .public)")
             reason = .joinFailed
         } else {
             report(.verifying, nil)
@@ -193,7 +215,7 @@ final class WifiController: NSObject, CLLocationManagerDelegate {
 
     private func update(_ phase: WifiSwitchState.Phase, target: String, from: String?, reason: WifiSwitchState.Reason? = nil) {
         switchState = WifiSwitchState(phase: phase, target: target, from: from, reason: reason, updatedAt: Date())
-        NSLog("Sleepless: Wi-Fi switch to %@ (from %@): %@ %@", target, from ?? "none", phase.rawValue, reason?.rawValue ?? "")
+        Log.wifi.notice("Wi-Fi switch to \(target, privacy: .public) (from \(from ?? "none", privacy: .public)): \(phase.rawValue, privacy: .public) \(reason?.rawValue ?? "", privacy: .public)")
         onChange?()
     }
 }

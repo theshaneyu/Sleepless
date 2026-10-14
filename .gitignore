@@ -23,3 +23,6 @@ Sleepless.iconset/
 .idea/
 *.swp
 .omc/
+
+# Agent notes for this repo (the global gitignore excludes AGENTS.md everywhere else)
+!AGENTS.md

@@ -595,7 +595,8 @@ function renderCurrent(w) {
     sub.textContent = "";
   } else {
     name.textContent = w.current;
-    sub.textContent = s.word;
+    const rejoined = w.lastRejoin?.ssid === w.current && Date.now() - new Date(w.lastRejoin.at) < 86400000;
+    sub.textContent = rejoined ? `${s.word} · ${clock(new Date(w.lastRejoin.at))} 自動重連` : s.word;
   }
 }
 
@@ -622,7 +623,7 @@ function renderNetworks() {
   const hint = $("hint");
   hint.replaceChildren();
   if (hotspotAway) hint.append(el("span", { html: ICON.info }), "iPhone 熱點要在「設定 › 個人熱點」畫面開著時才會出現，打開後再按右上角重新掃描。");
-  else if (nets.some((n) => !n.saved)) hint.append(el("span", { html: ICON.info }), "在 Mac 的 Sleepless › Phone dashboard › Wi-Fi passwords 儲存密碼後，就能從這裡切換。");
+  else if (nets.some((n) => !n.saved)) hint.append(el("span", { html: ICON.info }), "在 Mac 的 Sleepless › Wi-Fi passwords 儲存密碼後，就能從這裡切換。");
 }
 
 function render() {

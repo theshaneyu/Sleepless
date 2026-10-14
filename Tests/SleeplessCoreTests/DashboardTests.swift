@@ -65,6 +65,26 @@ import Testing
     }
 }
 
+@Suite struct WifiRejoinRulesTests {
+    let saved: Set<String> = ["bigcat", "Shane’s iPhone", "office"]
+
+    @Test func networkTheMacLostComesFirstEvenWhenWeaker() {
+        let signal = ["bigcat": -70, "Shane’s iPhone": -40, "office": -55, "cafe": -30]
+        #expect(wifiRejoinCandidates(previous: "bigcat", saved: saved, signal: signal)
+                == ["bigcat", "Shane’s iPhone", "office"])
+    }
+
+    @Test func onlySavedNetworksInRangeAreTried() {
+        let signal = ["Shane’s iPhone": -60, "cafe": -30]
+        #expect(wifiRejoinCandidates(previous: "bigcat", saved: saved, signal: signal) == ["Shane’s iPhone"])
+        #expect(wifiRejoinCandidates(previous: nil, saved: saved, signal: ["cafe": -30]).isEmpty)
+    }
+
+    @Test func retriesEvery15SecondsForTenMinutesThenEveryMinute() {
+        #expect([30, 599, 600, 86_400].map { wifiRejoinRetryInterval(offlineFor: $0) } == [15, 15, 60, 60])
+    }
+}
+
 @Suite struct DashboardHTTPTests {
     @Test func waitsForTheWholeBody() {
         let head = "POST /api/wifi/switch HTTP/1.1\r\nHost: mac\r\nContent-Length: 17\r\n\r\n"

@@ -73,6 +73,7 @@ enum DashboardProblem: Error, Equatable {
 @MainActor
 final class DashboardController {
     let wifi = WifiController()
+    private(set) lazy var rejoin = WifiRejoinWatchdog(wifi: wifi)   // runs on its own switch, not the dashboard's
     private let energy = AppEnergyMonitor()
     weak var host: DashboardHost?
     var onChange: (() -> Void)?
@@ -213,6 +214,7 @@ final class DashboardController {
             let rssi: Int?
             let locationAuthorized: Bool
             let lastSwitch: WifiSwitchState?
+            let lastRejoin: WifiRejoinWatchdog.Rejoin?
         }
         let machine: String
         let battery: BatterySnapshot?
@@ -225,7 +227,8 @@ final class DashboardController {
                battery: readBattery(),
                sleepless: host?.dashboardSleeplessSnapshot(),
                wifi: .init(current: wifi.currentSSID, rssi: wifi.currentRSSI,
-                           locationAuthorized: wifi.locationAuthorized, lastSwitch: wifi.switchState))
+                           locationAuthorized: wifi.locationAuthorized, lastSwitch: wifi.switchState,
+                           lastRejoin: rejoin.lastRejoin))
     }
 
     private lazy var touchIconPNG = bundledIconPNG(named: "apple-touch-icon")
