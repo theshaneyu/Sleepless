@@ -260,6 +260,26 @@ private func makeCupGlyph(_ glyph: SleepGlyph) -> NSImage {
 // Flipped container so popover content lays out top-down with simple frames.
 private final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
+// AppKit hands ⌘X, ⌘C, ⌘V, ⌘A and ⌘Z to text fields through the Edit menu's key equivalents. A
+// menu-bar-only app has no menu bar and so no Edit menu, which leaves those keys dead in the
+// password and search fields. This menu is never shown; it only carries the shortcuts.
+private func makeEditOnlyMainMenu() -> NSMenu {
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+    editItem.submenu = edit
+    let main = NSMenu()
+    main.addItem(NSMenuItem(title: "Sleepless", action: nil, keyEquivalent: ""))   // the app menu's slot
+    main.addItem(editItem)
+    return main
+}
+
 // Brand accent (2026 "Liquid Glass" redesign): indigo -> violet -> fuchsia. The
 // violet mid-tone is the single accent the popover uses to communicate the
 // privileged "awake" state, matching the app icon's gradient mid-stop. These are
@@ -659,6 +679,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DashboardHost,
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = makeEditOnlyMainMenu()
         batteryFloorPercent = min(max((UserDefaults.standard.object(forKey: floorKey) as? Int) ?? floorDefault, floorMin), floorMax)
         let defaults = UserDefaults.standard
         rcConfig = .load(enabled: defaults.object(forKey: rcEnabledKey) as? Bool,
