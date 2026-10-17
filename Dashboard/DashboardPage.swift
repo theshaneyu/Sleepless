@@ -40,6 +40,7 @@ let dashboardPage = #"""
     --brand: linear-gradient(135deg, #22d3ee 0%, #0ea5e9 42%, #2563eb 100%);
     --brand-glow: rgba(14, 165, 233, .32);
     --green: #34c759;
+    --yellow: #ffcc00;
     --amber: #ff9500;
     --red: #ff3b30;
     --sheet: #ffffff;
@@ -61,6 +62,7 @@ let dashboardPage = #"""
       --accent: #3b9eff;
       --accent-soft: rgba(59, 158, 255, .16);
       --green: #30d158;
+      --yellow: #ffd60a;
       --amber: #ff9f0a;
       --red: #ff453a;
       --sheet: #1c1c1f;
@@ -541,7 +543,7 @@ function renderBattery(b, floor) {
   const pct = $("pct");
   pct.classList.remove("skeleton");
   pct.textContent = b.percent;
-  const color = b.charging ? "var(--green)" : b.percent <= floor + 5 ? "var(--red)" : b.percent <= 30 ? "var(--amber)" : "var(--green)";
+  const color = b.onBattery ? "var(--yellow)" : "var(--green)";
   const ring = $("ring");
   ring.style.stroke = color;
   ring.style.strokeDashoffset = RING * (1 - b.percent / 100);
